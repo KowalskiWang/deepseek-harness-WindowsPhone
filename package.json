@@ -1,0 +1,36 @@
+{
+  "name": "lumia-dsh",
+  "version": "0.2.2",
+  "private": true,
+  "description": "DeepSeek Harness (dsh) ported to Windows Phone 8.1 / Windows 10 Mobile as an HTML/JS app, plus a LAN web build and gateway.",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:icons": "node scripts/make-icons.mjs",
+    "check:es5": "node scripts/check-es5.mjs",
+    "test": "node --test tests/core.test.mjs",
+    "gateway": "node gateway/server.mjs",
+    "package:appx": "sh scripts/package-appx.sh",
+    "test:live": "node tests/live-llm.mjs && node tests/live-agent.mjs tools && node tests/live-compaction.mjs",
+    "test:ie11": "node tests/ie11-worker-sim.mjs"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.13",
+    "@babel/plugin-transform-react-jsx": "^7.29.7",
+    "@babel/preset-env": "^7.29.14",
+    "@resvg/resvg-js": "^2.6.2",
+    "@rollup/plugin-babel": "^6.1.0",
+    "@rollup/plugin-commonjs": "^28.0.9",
+    "@rollup/plugin-node-resolve": "^15.3.1",
+    "@rollup/plugin-terser": "^0.4.4",
+    "acorn": "^8.19.0",
+    "core-js": "^3.51.0",
+    "regenerator-runtime": "^0.14.1",
+    "rollup": "^4.68.8"
+  },
+  "dependencies": {
+    "preact": "^10.29.8",
+    "sval": "^0.6.12"
+  },
+  "type": "module"
+}

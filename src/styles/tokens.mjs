@@ -1,0 +1,61 @@
+// Theme tokens. app.css references them as var(--name); scripts/build.mjs
+// substitutes each theme into a static stylesheet because IE11 (Windows
+// Phone 8.1) has no CSS custom properties.
+const accent = '#4d6bfe'
+const shared = {
+  accent,
+  'accent-strong': '#3b55e6',
+  'accent-soft': 'rgba(77,107,254,0.16)',
+  'accent-text': '#ffffff',
+  danger: '#e5484d',
+  'danger-soft': 'rgba(229,72,77,0.15)',
+  warning: '#f5a623',
+  'warning-soft': 'rgba(245,166,35,0.16)',
+  success: '#30a46c',
+  'success-soft': 'rgba(48,164,108,0.15)',
+  font: '"Segoe WP", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif',
+  mono: 'Consolas, "Lucida Console", Menlo, monospace',
+}
+
+export const themes = {
+  dark: {
+    ...shared,
+    bg: '#000000',
+    'bg-elev': '#1c1c1e',
+    'bg-elev2': '#2a2a2d',
+    'bg-input': '#1f1f22',
+    'bg-code': '#141417',
+    'bg-user': '#24305c',
+    border: '#38383c',
+    'border-strong': '#56565c',
+    text: '#ffffff',
+    'text-2': '#c7c7cc',
+    'text-3': '#8e8e93',
+    'text-on-accent': '#ffffff',
+    shadow: 'rgba(0,0,0,0.6)',
+    overlay: 'rgba(0,0,0,0.72)',
+    'diff-add': 'rgba(48,164,108,0.22)',
+    'diff-del': 'rgba(229,72,77,0.22)',
+    'appbar-bg': '#1f1f1f',
+  },
+  light: {
+    ...shared,
+    bg: '#ffffff',
+    'bg-elev': '#f2f2f5',
+    'bg-elev2': '#e6e6eb',
+    'bg-input': '#f4f4f7',
+    'bg-code': '#f5f6f8',
+    'bg-user': '#e3e8ff',
+    border: '#d9d9de',
+    'border-strong': '#b4b4bb',
+    text: '#111111',
+    'text-2': '#3a3a3f',
+    'text-3': '#6e6e75',
+    'text-on-accent': '#ffffff',
+    shadow: 'rgba(0,0,0,0.18)',
+    overlay: 'rgba(0,0,0,0.45)',
+    'diff-add': 'rgba(48,164,108,0.18)',
+    'diff-del': 'rgba(229,72,77,0.16)',
+    'appbar-bg': '#eeeeee',
+  },
+}

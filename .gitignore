@@ -1,0 +1,17 @@
+# dependencies & build output
+node_modules/
+dist/
+
+# secrets — never publish
+api.txt
+*.key
+*.pem
+*.pfx
+signing/
+
+# locally built tools (build appx-util yourself; see README)
+tools/bin/
+
+# macOS metadata (AppleDouble files appear on exFAT volumes)
+._*
+.DS_Store
