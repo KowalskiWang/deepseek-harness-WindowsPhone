@@ -203,6 +203,7 @@ export class SessionStore extends Emitter {
   }
 
   async flush(session) {
+    if (session.removed) return
     const pending = session.takePending()
     if (!pending.length) return
     const text = pending.map(ev => JSON.stringify(ev)).join('\n') + '\n'
@@ -224,6 +225,16 @@ export class SessionStore extends Emitter {
 
   async _writeIndex() {
     try { await this.vfs.writeJson(this.root + '/index.json', this.index) } catch (e) { /* retried on next change */ }
+  }
+
+  /** Delete a session and its event log (used by the self-test to clean up). */
+  async remove(id) {
+    if (this._flushTimers[id]) { clearTimeout(this._flushTimers[id]); delete this._flushTimers[id] }
+    if (this.loaded[id]) { this.loaded[id].removed = true; delete this.loaded[id] }
+    this.index = this.index.filter(m => m.id !== id)
+    this._saveIndex()
+    this.emit('index', null)
+    await this.vfs.remove(`${this.root}/${id}`).catch(() => {})
   }
 
   unload(id) {

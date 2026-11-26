@@ -105,6 +105,9 @@ const zh = {
   tv_fork: '分叉子智能体', tv_subagent: '创建子智能体', tv_message: '发消息给', tv_agents: '列出智能体', tv_wait: '等待输入', tv_goal_create: '创建目标', tv_goal_get: '读取目标', tv_goal_update: '更新目标',
   tv_sched_create: '创建定时任务', tv_sched_edit: '修改定时任务', tv_sched_list: '列出定时任务', tv_sched_view: '查看定时任务',
   src_goal: '目标轮次 ', src_schedule: '定时任务 · ', src_subagent: '子智能体 ', src_done: ' 已完成', src_ended: ' 已结束', src_from: '来自 ', src_msg: ' 的消息', src_continue: '请求继续生成',
+  selfTest: '设备自检', selfTestIntro: '在这台手机上逐项检查存储、凭据库、图片、代码沙箱、网络、DeepSeek 接口、智能体工具链、联网搜索、子智能体、压缩、定时任务和各个页面。完整自检会调用模型，大约需要 10–20 分钟，并消耗少量 tokens；自检用的会话和文件夹结束后自动删除。',
+  selfTestFull: '运行完整自检', selfTestOffline: '离线自检（不调用模型）', selfTestRunning: '正在自检', selfTestDone: '自检完成', selfTestAgain: '再运行一次',
+  selfTestNoKey: '尚未配置 API Key，需要模型的项目会被跳过。', st_pass: '通过', st_fail: '失败', st_skip: '跳过', copyResult: '复制结果',
   mk_plan_on: '进入计划模式', mk_plan_approved: '计划已批准，退出计划模式', mk_plan_off: '退出计划模式', mk_goal_cleared: '目标已清除', turns: '轮',
 }
 
@@ -187,6 +190,9 @@ const en = {
   tv_todo: 'Update to-do list', tv_items: ' items', tv_plan: 'Submit plan', tv_ask: 'Ask question', tv_questions: ' questions', tv_present: 'Present files', tv_search: 'Web search', tv_fetch: 'Web fetch', tv_skill: 'Load skill', tv_code: 'Run code', tv_workflow: 'Workflow',
   tv_fork: 'Fork subagent', tv_subagent: 'Start subagent', tv_message: 'Message', tv_agents: 'List agents', tv_wait: 'Wait for input', tv_goal_create: 'Create goal', tv_goal_get: 'Read goal', tv_goal_update: 'Update goal',
   tv_sched_create: 'Create scheduled task', tv_sched_edit: 'Edit scheduled task', tv_sched_list: 'List scheduled tasks', tv_sched_view: 'View scheduled task',
+  selfTest: 'Self-test', selfTestIntro: 'Checks storage, the credential vault, images, the code sandbox, networking, the DeepSeek API, the agent tool chain, web search, subagents, compaction, schedules and every page on this phone. The full run calls the model, takes about 10–20 minutes and uses a few tokens; its sessions and folder are deleted afterwards.',
+  selfTestFull: 'Run full self-test', selfTestOffline: 'Offline self-test (no model calls)', selfTestRunning: 'Running self-test', selfTestDone: 'Self-test finished', selfTestAgain: 'Run again',
+  selfTestNoKey: 'No API key is configured; checks that need a model will be skipped.', st_pass: 'passed', st_fail: 'failed', st_skip: 'skipped', copyResult: 'Copy result',
   src_goal: 'Goal round ', src_schedule: 'Automation · ', src_subagent: 'Subagent ', src_done: ' finished', src_ended: ' ended', src_from: 'Message from ', src_msg: '', src_continue: 'Requested to continue generation',
   mk_plan_on: 'Entered plan mode', mk_plan_approved: 'Plan approved; left plan mode', mk_plan_off: 'Left plan mode', mk_goal_cleared: 'Goal cleared', turns: 'turns',
 }

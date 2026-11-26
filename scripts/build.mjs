@@ -208,6 +208,8 @@ async function main() {
 function toAppxVersion(v) {
   const nums = v.split(/[.-]/).map(n => parseInt(n, 10)).filter(n => !Number.isNaN(n))
   while (nums.length < 4) nums.push(0)
+  // APPX_REVISION sets the fourth part, so device test builds install over each other
+  if (process.env.APPX_REVISION) nums[3] = parseInt(process.env.APPX_REVISION, 10) || 0
   return nums.slice(0, 4).join('.')
 }
 

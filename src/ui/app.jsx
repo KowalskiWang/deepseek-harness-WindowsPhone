@@ -9,12 +9,13 @@ import { PluginsPage } from './pages/plugins.jsx'
 import { AutomationPage, TaskPage } from './pages/automation.jsx'
 import { FilesPage, PreviewPage } from './pages/files.jsx'
 import { TextPage, ImagePage, PanelPage, AboutPage } from './pages/misc.jsx'
+import { SelfTestPage } from './pages/selftest.jsx'
 import { t } from './i18n.js'
 
 const PAGES = {
   home: HomePage, chat: ChatPage, settings: SettingsPage, provider: ProviderPage, plugins: PluginsPage,
   automation: AutomationPage, task: TaskPage, files: FilesPage, preview: PreviewPage,
-  text: TextPage, image: ImagePage, panel: PanelPage, about: AboutPage,
+  text: TextPage, image: ImagePage, panel: PanelPage, about: AboutPage, selftest: SelfTestPage,
 }
 
 export const WELCOME_VERSION = '2026-11-22.1'

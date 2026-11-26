@@ -49,7 +49,7 @@ export class McpClient {
   async connect() {
     this.state = 'connecting'
     try {
-      const init = await this.rpc('initialize', { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'dsh-mobile', version: '0.2.2' } })
+      const init = await this.rpc('initialize', { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'dsh-mobile', version: typeof __DSH_VERSION__ !== 'undefined' ? __DSH_VERSION__ : 'dev' } })
       this.instructions = (init && init.instructions) || ''
       this.capabilities = (init && init.capabilities) || {}
       await this.notify('notifications/initialized')

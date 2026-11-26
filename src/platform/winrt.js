@@ -6,7 +6,7 @@ import { Vfs } from '../core/vfs.js'
 import { makeError } from '../core/util.js'
 import { createXhrHttp } from './http-xhr.js'
 import { createWorkerRunner } from '../core/tools/code-tool.js'
-import { createImageTools, sniffMime, uaHint } from './dom-common.js'
+import { createImageTools, sniffMime } from './dom-common.js'
 
 const RESOURCE = 'DSH Mobile'
 
@@ -134,6 +134,58 @@ export class StorageBackend {
   }
 }
 
+/** deviceFamilyVersion: 64-bit decimal string, major.minor.build.revision in 16-bit parts. */
+function decodeFamilyVersion(str) {
+  let digits = String(str || '').replace(/\D/g, '').split('').map(Number)
+  if (!digits.length) return ''
+  const parts = []
+  for (let i = 0; i < 4; i++) {
+    let rem = 0
+    const q = []
+    for (let j = 0; j < digits.length; j++) {
+      const cur = rem * 10 + digits[j]
+      const qd = Math.floor(cur / 65536)
+      rem = cur % 65536
+      if (q.length || qd) q.push(qd)
+    }
+    parts.unshift(rem)
+    digits = q.length ? q : [0]
+  }
+  return parts.join('.')
+}
+
+/**
+ * What the device is. A Windows Phone 8.1 package also runs on Windows 10
+ * Mobile, in the same IE11-based engine, so the user agent can still say
+ * "Windows Phone 8.1"; the Windows 10 APIs tell the two apart.
+ */
+export function winrtDeviceInfo() {
+  const out = {}
+  try {
+    const v = Windows.System.Profile.AnalyticsInfo.versionInfo
+    out.deviceFamily = v.deviceFamily
+    out.osVersion = decodeFamilyVersion(v.deviceFamilyVersion)
+  } catch (e) { out.deviceFamily = null }
+  try { out.win10Apis = !!(Windows.Foundation.Metadata && Windows.Foundation.Metadata.ApiInformation) } catch (e) { out.win10Apis = false }
+  try {
+    const d = new Windows.Security.ExchangeActiveSyncProvisioning.EasClientDeviceInformation()
+    out.manufacturer = d.systemManufacturer
+    out.model = d.systemProductName
+    out.os = d.operatingSystem
+  } catch (e) { /* not available */ }
+  try {
+    const v = Windows.ApplicationModel.Package.current.id.version
+    out.packageVersion = [v.major, v.minor, v.build, v.revision].join('.')
+  } catch (e) { /* not packaged */ }
+  return out
+}
+
+function winrtHint(info) {
+  if (info.deviceFamily) return /mobile/i.test(info.deviceFamily) ? 'w10m' : 'web'
+  if (info.win10Apis) return 'w10m'
+  return 'wp81'
+}
+
 export async function createWinrtPlatform() {
   const S = Windows.Storage
   const local = S.ApplicationData.current.localFolder
@@ -189,10 +241,12 @@ export async function createWinrtPlatform() {
   const fal = () => S.AccessCache.StorageApplicationPermissions.futureAccessList
   const images = createImageTools()
   const vault = () => new Windows.Security.Credentials.PasswordVault()
+  const device = winrtDeviceInfo()
 
   return {
     kind: 'winrt',
-    hint: /Windows Phone 8\.1/i.test(navigator.userAgent) || !(Windows.Foundation.Metadata && Windows.Foundation.Metadata.ApiInformation) ? 'wp81' : uaHint() === 'web' ? 'w10m' : uaHint(),
+    hint: winrtHint(device),
+    deviceInfo: () => device,
     persistent: true,
     vfs,
     http: createXhrHttp(),

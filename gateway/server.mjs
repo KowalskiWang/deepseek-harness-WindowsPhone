@@ -9,10 +9,13 @@
 //   • optionally injects the DeepSeek API key (--key-file) so the key never
 //     travels over Wi-Fi; clients then authenticate with a short access code
 //   • serves the signed APPX + certificate under /download/
+//   • with --selftest: collects on-device self-test reports (POST /gateway/selftest
+//     → dist/selftest/<id>.json) and serves a tiny MCP test server (/gateway/mcp-test)
 //
 // Usage:
 //   node gateway/server.mjs [--port 8787] [--key-file ../api.txt] [--code 123456]
 //                           [--proxy http://127.0.0.1:1082] [--host 0.0.0.0]
+//                           [--selftest [dir]]
 // No dependencies; Node 18+.
 import http from 'node:http'
 import https from 'node:https'
@@ -27,7 +30,7 @@ import { fileURLToPath } from 'node:url'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
-const VERSION = '0.2.2'
+const VERSION = '0.2.3'
 
 // ---------------------------------------------------------------- options
 function arg(name, def) {
@@ -43,6 +46,8 @@ const PROXY = arg('proxy', process.env.DSH_GATEWAY_PROXY || '')
 const STATIC_DIR = path.resolve(arg('static', path.join(root, 'dist/web')))
 const DOWNLOAD_DIR = path.resolve(arg('downloads', path.join(root, 'dist/package')))
 const DEEPSEEK_HOST = 'api.deepseek.com'
+const SELFTEST = arg('selftest', '')
+const SELFTEST_DIR = SELFTEST ? path.resolve(SELFTEST === true ? path.join(root, 'dist/selftest') : SELFTEST) : ''
 
 let apiKey = ''
 if (KEY_FILE) {
@@ -190,6 +195,89 @@ async function relay(req, res, encodedOrigin, rest) {
   return upstream.statusCode
 }
 
+// ---------------------------------------------------------------- self-test reports & MCP test server
+const MARK = { pass: '✓', fail: '✗', skip: '–' }
+
+async function selftestReport(req, res) {
+  const body = await readBody(req, 4 * 1024 * 1024)
+  let r
+  try { r = JSON.parse(body.toString('utf8')) } catch (e) { return send(res, 400, { error: 'bad json' }) }
+  const id = String(r.id || '')
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return send(res, 400, { error: 'bad id' })
+  fs.mkdirSync(SELFTEST_DIR, { recursive: true })
+  const log = path.join(SELFTEST_DIR, id + '.jsonl')
+  let size = 0
+  try { size = fs.statSync(log).size } catch (e) { size = 0 }
+  if (size < 20 * 1024 * 1024) fs.appendFileSync(log, JSON.stringify(Object.assign({ from: req.socket.remoteAddress }, r)) + '\n')
+  const clean = s => String(s == null ? '' : s).replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+  if (r.kind === 'start') console.log(`SELFTEST ${id} started on ${req.socket.remoteAddress}: ${clean(r.env && (r.env.model || r.env.ua)).slice(0, 160)}`)
+  else if (r.kind === 'check' && r.check) {
+    const c = r.check
+    console.log(`SELFTEST ${id} ${MARK[c.status] || '?'} ${clean(c.suite)} / ${clean(c.name)} (${c.ms} ms)${c.status === 'pass' ? '' : '  ' + clean(c.detail).slice(0, 300)}`)
+  } else if (r.kind === 'done' && r.result) {
+    fs.writeFileSync(path.join(SELFTEST_DIR, id + '.json'), JSON.stringify(r.result, null, 1))
+    const sm = r.result.summary || {}
+    console.log(`SELFTEST ${id} finished: ${sm.pass} passed, ${sm.fail} failed, ${sm.skip} skipped in ${Math.round((r.result.ms || 0) / 1000)} s`)
+  }
+  res.writeHead(204, { 'cache-control': 'no-store' })
+  res.end()
+}
+
+// Self-test requests handed to a phone that cannot read files pushed into its
+// app folder: scripts/device-test.mjs registers one (access code required),
+// the app fetches it once by id. Its API key is XOR-ed with a one-time pad
+// that only reaches the phone through Device Portal (HTTPS).
+const selftestRequests = new Map()
+
+async function selftestRequestPut(req, res) {
+  if (!codeOk(req)) return send(res, 401, { error: 'gateway access code required', code: 'GATEWAY_CODE' })
+  const body = await readBody(req, 64 * 1024)
+  let r
+  try { r = JSON.parse(body.toString('utf8')) } catch (e) { return send(res, 400, { error: 'bad json' }) }
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(String(r.id || ''))) return send(res, 400, { error: 'bad id' })
+  if (r.apiKey) return send(res, 400, { error: 'send apiKeyXor, never a plain key' })
+  selftestRequests.set(r.id, { request: r, at: Date.now() })
+  return send(res, 200, { ok: true })
+}
+
+function selftestRequestGet(req, res, id) {
+  const e = selftestRequests.get(id)
+  selftestRequests.delete(id) // served once
+  if (!e || Date.now() - e.at > 15 * 60 * 1000) return send(res, 404, { error: 'no such self-test request' })
+  console.log(`SELFTEST ${id} request fetched by ${req.socket.remoteAddress}`)
+  return send(res, 200, e.request)
+}
+
+const MCP_TOOLS = [
+  { name: 'add', description: 'Add two numbers and return the sum.', inputSchema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } }, required: ['a', 'b'] } },
+  { name: 'echo', description: 'Return the given text unchanged.', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
+]
+
+/** Minimal Streamable-HTTP MCP server (JSON responses) for the self-test. */
+async function mcpTest(req, res) {
+  const body = await readBody(req, 256 * 1024)
+  let m
+  try { m = JSON.parse(body.toString('utf8')) } catch (e) { return send(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }) }
+  if (m.id === undefined || m.id === null) { res.writeHead(202); res.end(); return } // notification
+  const reply = result => send(res, 200, { jsonrpc: '2.0', id: m.id, result })
+  const fail = (code, message) => send(res, 200, { jsonrpc: '2.0', id: m.id, error: { code, message } })
+  const p = m.params || {}
+  switch (m.method) {
+    case 'initialize':
+      res.setHeader('mcp-session-id', crypto.randomUUID())
+      return reply({ protocolVersion: p.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'dsh-selftest', version: VERSION }, instructions: 'Test server for the DSH Mobile self-test. The add tool adds two numbers.' })
+    case 'ping': return reply({})
+    case 'tools/list': return reply({ tools: MCP_TOOLS })
+    case 'tools/call': {
+      const a = p.arguments || {}
+      if (p.name === 'add') return reply({ content: [{ type: 'text', text: String(Number(a.a) + Number(a.b)) }] })
+      if (p.name === 'echo') return reply({ content: [{ type: 'text', text: String(a.text) }] })
+      return reply({ content: [{ type: 'text', text: 'unknown tool ' + p.name }], isError: true })
+    }
+    default: return fail(-32601, 'method not found: ' + m.method)
+  }
+}
+
 // ---------------------------------------------------------------- static
 function serveFile(res, file, cacheable) {
   fs.stat(file, (err, st) => {
@@ -248,6 +336,11 @@ const server = http.createServer(async (req, res) => {
       res.end()
       return
     }
+    if (SELFTEST_DIR && urlPath === '/gateway/selftest' && req.method === 'POST') { cors(res); status = 204; return await selftestReport(req, res) }
+    if (SELFTEST_DIR && urlPath === '/gateway/mcp-test' && req.method === 'POST') { cors(res); status = 200; return await mcpTest(req, res) }
+    if (SELFTEST_DIR && urlPath === '/gateway/selftest-request' && req.method === 'POST') { status = 200; return await selftestRequestPut(req, res) }
+    const sr = /^\/gateway\/selftest-request\/([A-Za-z0-9_-]{1,64})$/.exec(urlPath)
+    if (SELFTEST_DIR && sr && req.method === 'GET') { cors(res); status = 200; return selftestRequestGet(req, res, sr[1]) }
     const m = /^\/x\/([A-Za-z0-9_-]+)(\/.*)?$/.exec(urlPath)
     if (m) { cors(res); status = await relay(req, res, m[1], m[2] || '/'); return }
     if (urlPath === '/download' || urlPath === '/download/') { status = 200; return send(res, 200, downloadsPage(), 'text/html; charset=utf-8') }
@@ -256,7 +349,8 @@ const server = http.createServer(async (req, res) => {
       status = f ? 200 : 404
       return f ? serveFile(res, f, false) : send(res, 404, 'not found', 'text/plain')
     }
-    let p = urlPath === '/' ? '/index.html' : urlPath
+    const pathOnly = urlPath.split('?')[0]
+    const p = pathOnly === '/' ? '/index.html' : pathOnly
     const f = safeJoin(STATIC_DIR, p)
     status = f ? 200 : 404
     if (!f) return send(res, 404, 'not found', 'text/plain')
@@ -267,7 +361,7 @@ const server = http.createServer(async (req, res) => {
     else res.destroy()
   } finally {
     const shown = urlPath.replace(/^\/x\/([A-Za-z0-9_-]+)/, (all, o) => { try { return '/x/' + b64urlDecode(o) } catch (e) { return all } })
-    if (!/^\/(css|js|img)\//.test(urlPath)) console.log(`${new Date().toISOString().slice(11, 19)} ${req.socket.remoteAddress} ${req.method} ${shown.slice(0, 120)} → ${status || res.statusCode} ${Date.now() - t0}ms`)
+    if (!/^\/(css|js|img)\//.test(urlPath) && urlPath !== '/gateway/selftest') console.log(`${new Date().toISOString().slice(11, 19)} ${req.socket.remoteAddress} ${req.method} ${shown.slice(0, 120)} → ${status || res.statusCode} ${Date.now() - t0}ms`)
   }
 })
 
@@ -280,4 +374,5 @@ server.listen(PORT, HOST, () => {
   console.log('  API key    :', apiKey ? `injected from ${KEY_FILE} (${mask(apiKey)})` : 'not injected (the app sends its own key)')
   console.log('  access code:', CODE || '(none)')
   if (PROXY) console.log('  upstream via proxy', PROXY)
+  if (SELFTEST_DIR) console.log('  self-test  : reports → ' + SELFTEST_DIR + ', MCP test server at /gateway/mcp-test')
 })

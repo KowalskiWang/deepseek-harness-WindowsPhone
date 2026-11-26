@@ -4,6 +4,7 @@
 // Usage: node tests/ie11-worker-sim.mjs
 import fs from 'node:fs'
 import vm from 'node:vm'
+import { SANDBOX_CASES, SANDBOX_TOOLS, checkSandboxCase } from '../src/selftest/sandbox-cases.js'
 
 const bundle = fs.readFileSync(new URL('../dist/web/js/sandbox-worker.js', import.meta.url), 'utf8')
 
@@ -85,57 +86,15 @@ async function run(code, tools = {}) {
   return { type: 'timeout', missingBefore: w.missingBefore }
 }
 
-const cases = [
-  ['arithmetic', 'return 1 + 1'],
-  ['loop sum', 'let s = 0; for (let i = 1; i <= 100; i++) s += i; return s'],
-  ['arrow + reduce', 'return [1, 2, 3].map(x => x * 2).reduce((a, b) => a + b, 0)'],
-  ['object result', 'const xs = [1, 2, 3]; return { xs, sum: xs.reduce((a, b) => a + b, 0), ok: true }'],
-  ['console.log', 'console.log("hello", 42, { a: 1 }); return "done"'],
-  ['template + destructuring', 'const { a, b = 2 } = { a: 1 }; const [x, ...rest] = [1, 2, 3]; return `${a}-${b}-${x}-${rest.length}`'],
-  ['for-of + spread + Set', 'const out = []; for (const v of [3, 1, 2]) out.push(v); return [...new Set([...out, 1])].sort()'],
-  ['Map + Object.entries', 'const m = new Map([["k", 1]]); return Object.entries({ a: 1, b: 2 }).length + m.get("k")'],
-  ['class', 'class P { constructor(n) { this.n = n } get twice() { return this.n * 2 } }; return new P(21).twice'],
-  ['async/await tool', 'const t = await tools.read({ file_path: "a.txt" }); return t.toUpperCase()'],
-  ['await in loop', 'const r = []; for (const f of ["a", "b"]) r.push(await tools.read({ file_path: f })); return r.join("|")'],
-  ['Promise.all tools', 'const r = await Promise.all(["x", "y"].map(f => tools.read({ file_path: f }))); return r'],
-  ['try/catch tool error', 'try { await tools.fail({}) } catch (e) { return "caught: " + e.message }'],
-  ['thrown error', 'throw new TypeError("boom")'],
-  ['JSON + regex', 'return JSON.stringify("a1b22c333".match(/\\d+/g))'],
-  ['string methods', 'return "abc".padStart(5, "-") + "x".repeat(3) + ("hello".includes("ell") ? "Y" : "N")'],
-  ['optional chaining / nullish', 'const o = { a: { b: null } }; return (o.a?.b ?? "dflt") + (o.z?.q ?? "")'],
-  ['Date + Math', 'return [typeof Date.now(), Math.max(...[1, 5, 3]), Math.trunc(4.7)]'],
-  ['newer array methods', 'const a = [3, 1, 2]; return [a.includes(2), a.find(x => x > 1), [[1], [2, [3]]].flat(2).length, a.at(-1), a.toSorted().join(""), Array.from({ length: 3 }, (_, i) => i * i)]'],
-  ['newer object/string methods', 'const o = Object.fromEntries([["a", 1], ["b", 2]]); return [Object.values(o).join("+"), Object.assign({}, o, { c: 3 }).c, "a-b-c".replaceAll("-", "/"), "xyz".at(-1), Number.isInteger(5), String(Symbol("s").description)]'],
-  ['Promise combinators', 'const r = await Promise.allSettled([Promise.resolve(1), Promise.reject(new Error("x"))]); const any = await Promise.any([Promise.reject(1), Promise.resolve(7)]); return r.map(x => x.status).join(",") + ":" + any'],
-  ['generator + iterator', 'function* g() { yield 1; yield 2; yield 3 } return [...g()].reduce((a, b) => a + b, 0)'],
-  ['async generator', 'async function* g() { yield 1; yield 2 } const out = []; for await (const v of g()) out.push(v); return out'],
-  ['Map/Set iteration', 'const m = new Map(); m.set("a", 1).set("b", 2); const keys = [...m.keys()]; const s = new Set("hello"); return keys.join("") + s.size + [...m.entries()].length'],
-  ['class without constructor', 'class C {} return typeof new C()'],
-  ['class fields', 'class C { x = 1; y = this.x + 1 } const c = new C(); return c.x + c.y'],
-  ['static method', 'class C { static make() { return new C() } hi() { return "hi" } } return C.make().hi()'],
-  ['extends without constructor', 'class A { constructor() { this.a = 1 } } class B extends A { b = 2 } const o = new B(); return o.a + o.b'],
-  ['getter/setter + private', 'class C { #x = 1; get x() { return this.#x } set x(v) { this.#x = v } } const c = new C(); c.x = 5; return c.x'],
-  ['class expression', 'const K = class { v() { return 7 } }; return new K().v()'],
-  ['class in async code', 'class C { x = 1 } class D extends C {} const t = await tools.read({ file_path: "q" }); return new D().x + t.length'],
-  ['sync body returning promise', 'return tools.read({ file_path: "p" })'],
-  ['sort + localeCompare', 'return ["b", "a", "c"].sort((x, y) => x.localeCompare(y)).join("")'],
-  ['text processing', 'const t = "line1\\nline2\\n\\nline4"; return t.split("\\n").filter(Boolean).map((l, i) => `${i + 1}:${l.trim()}`).join(",")'],
-  ['perf 100k loop', 'let s = 0; for (let i = 0; i < 100000; i++) s += i % 7; return s'],
-]
-
 let failures = 0
-for (const [name, code] of cases) {
+for (const c of SANDBOX_CASES) {
   const started = Date.now()
-  const r = await run(code, {
-    read: a => 'content of ' + a.file_path,
-    fail: () => { throw new Error('tool exploded') },
-  })
+  const r = await run(c.code, SANDBOX_TOOLS)
   const ms = Date.now() - started
-  const ok = r.type === 'done'
-  const expectedError = name === 'thrown error'
-  const pass = expectedError ? r.type === 'error' && /boom/.test(r.error) : ok
-  if (!pass) failures++
-  console.log(`${pass ? '✓' : '✗'} ${name.padEnd(28)} ${r.type}: ${String(r.type === 'done' ? r.value : r.error || '').replace(/\n/g, ' ').slice(0, 140)}${r.logs && r.logs.length ? '  logs=' + JSON.stringify(r.logs) : ''}  (${ms} ms)`)
+  const result = r.type === 'done' ? { value: r.value, logs: r.logs } : r.type === 'error' ? { error: r.error, logs: r.logs } : { error: 'timed out' }
+  const problem = checkSandboxCase(c, result)
+  if (problem) failures++
+  console.log(`${problem ? '✗' : '✓'} ${c.name.padEnd(28)} ${r.type}: ${String(r.type === 'done' ? JSON.stringify(r.value) : r.error || '').replace(/\n/g, ' ').slice(0, 140)}${problem ? '  ← ' + problem : ''}  (${ms} ms)`)
 }
 console.log(failures ? `${failures} failing` : 'all passing', '| built-ins removed before load:', (await run('return 1')).missingBefore)
 process.exit(failures ? 1 : 0)

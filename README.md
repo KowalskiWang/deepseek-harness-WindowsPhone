@@ -13,7 +13,10 @@
 
 WP8.1 的系统 TLS 不支持 api.deepseek.com 要求的加密套件（已实测），所以需要局域网网关；Windows 10 Mobile 可直连。
 
-已在 **Nokia Lumia 1020（Windows Phone 8.1，IE Mobile 11）** 真机上验证 Web 版：启动、引导、流式对话、文件工具、`run_code`、联网搜索均正常。APPX 版待在 Windows 电脑部署后验证。
+真机验证：
+
+- **Nokia Lumia 1020（Windows Phone 8.1，IE Mobile 11）**：局域网 Web 版的启动、引导、流式对话、文件工具、`run_code`、联网搜索均正常。
+- **Lumia 950（Windows 10 Mobile 10.0.15254）**：从 Mac 通过 Wi‑Fi 安装 APPX，应用直连 DeepSeek（不经网关），设备自检 83 项全部通过，用时 133 秒。
 
 ## 快速开始
 
@@ -23,7 +26,16 @@ npm run build
 node gateway/server.mjs --key-file api.txt
 ```
 
-手机连同一 Wi‑Fi，用 IE 打开终端打印的地址（如 `http://192.168.1.100:8787/`），输入访问码，API Key 留空即可开始；再“固定到开始屏幕”。APPX 安装、Windows 10 Mobile、常见问题见 **[docs/INSTALL.md](docs/INSTALL.md)**。
+手机连同一 Wi‑Fi，用 IE 打开终端打印的地址（如 `http://192.168.1.100:8787/`），输入访问码，API Key 留空即可开始；再“固定到开始屏幕”。
+
+**Windows 10 Mobile** 可以直接通过 Wi‑Fi 安装原生 APPX（手机打开开发人员模式和设备门户，不需要 Windows 电脑），装好后直连 DeepSeek，不需要网关：
+
+```bash
+npm run package:appx
+node scripts/wdp.mjs <手机IP> install dist/package/DSHMobile_0.2.3.0_neutral.appx
+```
+
+APPX 安装、设备自检、常见问题见 **[docs/INSTALL.md](docs/INSTALL.md)**。
 
 ## 移植了什么
 
@@ -44,7 +56,8 @@ node gateway/server.mjs --key-file api.txt
 | `src/sandbox/` | run_code / workflow 的沙箱 Worker（sval 解释器） |
 | `gateway/server.mjs` | 局域网网关（无依赖） |
 | `appx/AppxManifest.xml` | WP8.1 应用清单（Windows 10 Mobile 同样可运行） |
-| `scripts/` | 构建、ES5 校验、图标生成、APPX 打包签名 |
+| `src/selftest/` | 设备自检（设置 → 关于 → 设备自检） |
+| `scripts/` | 构建、ES5 校验、图标生成、APPX 打包签名、设备门户安装（`wdp.mjs`）与真机自检（`device-test.mjs`） |
 | `tests/` | 单元测试（`npm test`）与真实 API 联调脚本（`npm run test:live`，读取 `api.txt`） |
 
 ## 开发命令
@@ -56,6 +69,7 @@ npm test                 # 单元测试（21 项）
 npm run test:live        # 用 api.txt 的密钥跑真实 API 联调（LLM 适配器、工具链、压缩）
 npm run package:appx     # 构建 + 签名 APPX → dist/package/
 npm run gateway -- --key-file api.txt
+node scripts/device-test.mjs --device <手机IP> --report http://<电脑IP>:8787 --gateway-code <访问码> --key-file api.txt   # Windows 10 Mobile 真机自检（网关加 --selftest）
 ```
 
 打包依赖 [appx-util](https://github.com/OSInside/appx-util) 和 OpenSSL 3：自行编译 appx-util（`cmake .. -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) && make`），把可执行文件放到 `tools/bin/appx` 或设置环境变量 `APPX_UTIL`。签名私钥首次打包时自动生成到 `signing/`（已被 .gitignore 排除，请勿提交）。

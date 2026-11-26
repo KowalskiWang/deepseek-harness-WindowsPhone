@@ -1,6 +1,7 @@
 #!/bin/sh
 # Build, sign and verify the DSH Mobile APPX (Windows Phone 8.1 / Windows 10 Mobile).
 #   sh scripts/package-appx.sh            (production build first)
+#   APPX_REVISION=7 sh scripts/package-appx.sh   (package version 0.2.3.7: test builds that install over each other)
 # Requires: Node 18+, OpenSSL 3 (Homebrew openssl@3), appx-util (tools/bin/appx or $APPX_UTIL).
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -14,8 +15,9 @@ if [ ! -x "$APPX" ]; then
 fi
 
 VERSION=$(node -p "require('./package.json').version")
+APPX_VERSION="$VERSION.${APPX_REVISION:-0}"
 PUBLISHER=$(sed -n 's/.*Publisher="\([^"]*\)".*/\1/p' appx/AppxManifest.xml | head -1)
-echo "== building web + appx layout ($VERSION, publisher $PUBLISHER)"
+echo "== building web + appx layout ($APPX_VERSION, publisher $PUBLISHER)"
 node scripts/build.mjs
 node scripts/check-es5.mjs
 
@@ -44,7 +46,7 @@ done
 COUNT=$(($(wc -l < "$MAP") - 1))
 
 mkdir -p dist/package
-OUT="dist/package/DSHMobile_${VERSION}.0_neutral.appx"
+OUT="dist/package/DSHMobile_${APPX_VERSION}_neutral.appx"
 rm -f "$OUT"
 echo "== packing $COUNT files → $OUT"
 "$APPX" -9 -o "$OUT" -c signing/dsh-mobile.pfx -f "$MAP"

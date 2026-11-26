@@ -3,12 +3,36 @@
 // gateway (/gateway/client-log) so device problems show up in its log.
 import { h, render } from 'preact'
 import { Runtime } from './core/runtime.js'
-import { ui, back, toast } from './ui/store.js'
+import { ui, back, toast, navigate } from './ui/store.js'
+import { readSelfTestRequest, startSelfTest } from './selftest/runner.js'
 import { App, applyTheme, onboarding } from './ui/app.jsx'
 import { setLanguage } from './ui/i18n.js'
 
 const BUILD = typeof __DSH_BUILD__ !== 'undefined' ? __DSH_BUILD__ : 'dev'
 let stage = 'start'
+
+// Boot log at /app/boot.json (LocalState\app\boot.json in the APPX): the stages
+// of the last start and any fatal error, readable over Windows Device Portal
+// when no gateway is configured to receive reports.
+const bootT0 = Date.now()
+const bootLog = { build: BUILD, at: new Date().toISOString(), stages: [] }
+let bootWrite = Promise.resolve()
+function writeBootLog() {
+  const text = JSON.stringify(bootLog, null, 1)
+  bootWrite = bootWrite.then(function () {
+    if (ui.platform && ui.platform.vfs) return ui.platform.vfs.writeText('/app/boot.json', text)
+    if (!isWinrt()) return null
+    const S = Windows.Storage
+    return S.ApplicationData.current.localFolder.createFolderAsync('app', S.CreationCollisionOption.openIfExists)
+      .then(function (f) { return f.createFileAsync('boot.json', S.CreationCollisionOption.replaceExisting) })
+      .then(function (file) { return S.FileIO.writeTextAsync(file, text) })
+  }).then(null, function () { /* diagnostics only */ })
+}
+function bootNote(name, extra) {
+  bootLog.stages.push(name + ' +' + (Date.now() - bootT0) + 'ms')
+  if (extra) for (const k in extra) bootLog[k] = extra[k]
+  writeBootLog()
+}
 
 function isWinrt() {
   try { return typeof Windows !== 'undefined' && !!Windows.Storage && !!Windows.UI.WebUI } catch (e) { return false }
@@ -36,6 +60,8 @@ function report(kind, e) {
 
 function fatal(e) {
   report('fatal', e)
+  bootLog.fatal = { stage, error: errText(e).slice(0, 2000) }
+  writeBootLog()
   const el = document.getElementById('app')
   if (!el) return
   el.textContent = ''
@@ -91,11 +117,13 @@ async function boot() {
     ? await import('./platform/winrt.js').then(m => m.createWinrtPlatform())
     : await import('./platform/web.js').then(m => m.createWebPlatform())
   ui.platform = platform
+  bootNote('platform', { hint: platform.hint, device: platform.deviceInfo ? platform.deviceInfo() : undefined, ua: navigator.userAgent })
   stage = 'runtime'
   const rt = new Runtime(platform)
   ui.rt = null
   await rt.init()
   ui.rt = rt
+  bootNote('runtime')
   // The web build served by a DSH gateway configures itself to use it.
   if (platform.servedByGateway && !rt.settings.get().gateway.url) {
     rt.settings.update({ gateway: { url: platform.origin } })
@@ -111,9 +139,19 @@ async function boot() {
   platform.onSuspend(() => rt.flush())
   rt.on('settings', () => applyTheme())
   rt.llm.ensureListing().catch(() => {})
-  setTimeout(() => onboarding().catch(e => report('onboarding', e)), 200)
+  // A self-test request (pushed over Device Portal, or ?selftest= on the web
+  // build) runs before the first-run dialogs, which would cover its page.
+  let selfTest = null
+  const selfTestDiag = {}
+  try { selfTest = await readSelfTestRequest(rt, platform, selfTestDiag) } catch (e) { selfTestDiag.error = errText(e); report('selftest', e) }
+  bootNote('rendered', { selftest: selfTestDiag })
+  if (selfTest) {
+    navigate('selftest')
+    startSelfTest(rt, selfTest).promise.then(() => onboarding().catch(e => report('onboarding', e)))
+  } else setTimeout(() => onboarding().catch(e => report('onboarding', e)), 200)
   stage = 'running'
   booted = true
+  bootNote('running')
   report('started', 'ok')
   rt.on('diagnostic', d => report(d.kind, JSON.stringify(d.data)))
   if (appCache) setInterval(function () { try { appCache.update() } catch (e) { /* offline or no manifest */ } }, 60000)

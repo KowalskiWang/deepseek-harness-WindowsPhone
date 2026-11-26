@@ -1,6 +1,6 @@
 {
   "name": "lumia-dsh",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "DeepSeek Harness (dsh) ported to Windows Phone 8.1 / Windows 10 Mobile as an HTML/JS app, plus a LAN web build and gateway.",
   "license": "MIT",

@@ -88,6 +88,7 @@ export function AboutPage() {
         <p>{t('aboutBody')}</p>
         <p className="muted small">MIT License. DeepSeek Harness © 2026 DeepSeek (MIT). Preact (MIT), core-js (MIT), sval (MIT).</p>
         <Button onClick={() => ui.platform.openExternal('https://github.com/deepseek-ai/deepseek-harness')}>GitHub · deepseek-harness</Button>
+        <div className="pad-v"><Button onClick={() => navigate('selftest')}>{t('selfTest')}</Button></div>
       </div>
     </Page>
   )
