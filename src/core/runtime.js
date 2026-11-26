@@ -20,6 +20,7 @@ import { findProjectRoot } from './instructions.js'
 import { McpManager } from './mcp.js'
 import { splitCommand, findCommand } from './commands.js'
 import { presetOf } from './prompt.js'
+import { DshRemote } from './remote-dsh.js'
 
 void FS_TOOLS
 
@@ -47,6 +48,8 @@ export class Runtime extends Emitter {
     })
     this.mcp = new McpManager(this.net, () => this.settings.get().mcp.servers)
     this.schedule = new ScheduleService({ vfs: this.vfs, deliver: task => this.deliverScheduled(task) })
+    // desktop dsh behind the gateway's --dsh bridge (sessions that run on the computer)
+    this.remote = new DshRemote({ http: platform.http, vfs: this.vfs, gateway: () => { const g = this.settings.get().gateway || {}; return g.url ? { url: g.url.replace(/\/+$/, ''), code: g.code || '' } : null } })
     this.agents = {}
     this.activeSessionId = null
     this.gatewayInfo = null
@@ -80,6 +83,8 @@ export class Runtime extends Emitter {
     await this.sessions.init()
     await this.schedule.init()
     await installBundledSkills(this.vfs).catch(() => {})
+    await this.remote.init().catch(() => {})
+    if (this.remote.running().length) this.remote.start()
     // sessions that were running when the app closed are idle now
     for (const m of this.sessions.list()) if (m.status && m.status !== 'idle' && m.status !== 'failed') this.sessions.updateMeta(m.id, { status: 'idle' })
     this.settings.on('change', () => { this._skills.at = 0; this.emit('settings') })

@@ -16,7 +16,7 @@ WP8.1 的系统 TLS 不支持 api.deepseek.com 要求的加密套件（已实测
 真机验证：
 
 - **Nokia Lumia 1020（Windows Phone 8.1，IE Mobile 11）**：局域网 Web 版的启动、引导、流式对话、文件工具、`run_code`、联网搜索均正常。
-- **Lumia 950（Windows 10 Mobile 10.0.15254）**：从 Mac 通过 Wi‑Fi 安装 APPX，应用直连 DeepSeek（不经网关），设备自检 83 项全部通过，用时 133 秒。
+- **Lumia 950（Windows 10 Mobile 10.0.15254）**：从 Mac 通过 Wi‑Fi 安装 APPX，应用直连 DeepSeek（不经网关）。完整设备自检 93 项全部通过，包括通过电脑上的 dsh 0.2.2‑rc.5 远程执行命令，以及从手机批准越权操作。
 
 ## 快速开始
 
@@ -42,6 +42,8 @@ APPX 安装、设备自检、常见问题见 **[docs/INSTALL.md](docs/INSTALL.md
 - **智能体运行时**（`src/core/`）：上游 agent-loop 的完整移植——queue/steer 收件箱、轮次/步骤循环、流式、并行工具批处理、中止与崩溃修复、重试退避、系统提示与运行时上下文（文本逐字移植）、AGENTS.md 指令、技能、上下文压缩、子智能体、workflow、目标、定时任务、计划模式、沙箱权限与提权审批、MCP（HTTP）。
 - **DeepSeek 协议**：与上游相同走 Anthropic Messages 兼容接口（thinking、签名回传、in-history 系统提示），以及 OpenAI 兼容的自定义提供商。
 - **工具**：read / write / edit / apply_patch / read_image / glob / grep / todo_write / exit_plan_mode / ask_user_question / present / web_search / web_fetch / skill / subagent 系列 / workflow / goal 系列 / schedule 系列 / MCP；没有 shell 的手机上，bash 与 PTC 由 **run_code**（沙箱 JavaScript，可 `await tools.x()`）代替。
+- **用手机操作电脑**：网关加 `--dsh` 后，手机可以把任务交给电脑上的 DeepSeek Harness（dsh，通过 ACP 协议），由它用终端、文件和浏览器干活；需要授权的操作会在手机上确认。见 [docs/INSTALL.md](docs/INSTALL.md) 3d。
+- **手机体验**：键盘弹出时输入框始终可见，发送后键盘不收起；状态栏显示进度；开始屏幕磁贴和角标显示最新结果和待处理事项；需要确认时会振动；点通知直接打开对应会话；Windows 10 Mobile 上切到后台也能把任务跑完。
 - **界面**（`src/ui/`）：Metro 风格的手机界面，覆盖上游 Web UI 的全部主要流程——会话列表、工作区、输入框（`/` 指令、`@` 文件、图片、模型/推理等级、权限、计划）、对话渲染、审批/提问/计划审阅卡片、会话面板、文件浏览、设置、插件、自动化任务、中英双语、深浅色。
 
 逐项对照（含未移植项及原因）：**[docs/FEATURES.md](docs/FEATURES.md)**。

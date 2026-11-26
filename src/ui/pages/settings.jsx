@@ -3,7 +3,7 @@ import { useState, useEffect } from 'preact/hooks'
 import { Icon } from '../icons.jsx'
 import { t, setLanguage } from '../i18n.js'
 import { ui, navigate, menu, confirm, toast, closeOverlay, useRuntime, back } from '../store.js'
-import { Page, Pivot, Section, Field, Toggle, Select, Button, ListItem, Spinner, registerOverlay } from '../components.jsx'
+import { Page, Pivot, Section, Field, Toggle, Select, Button, ListItem, Spinner, registerOverlay, RAW } from '../components.jsx'
 import { THIRD_PARTY_CATALOG, DEEPSEEK_MODELS, DEEPSEEK_BASE_URL, PROTOCOLS } from '../../core/llm/index.js'
 import { PRESETS } from '../../core/prompt.js'
 import { effortLabel, PERM_LABEL, pickModel } from '../composer.jsx'
@@ -26,7 +26,7 @@ export function SecretField({ label, credId, hint, placeholder, onSaved }) {
   return (
     <Field label={label} hint={draft ? '' : saved ? t('savedKey') : hint}>
       <div className="secret-row">
-        <input className="input mono" type={show ? 'text' : 'password'} autoComplete="off" value={draft} placeholder={saved ? rt.settings.credentialPreview(credId) : (placeholder || 'sk-…')} onInput={e => { setDraft(e.target.value); setShow(false) }} />
+        <input className="input mono" {...RAW} type={show ? 'text' : 'password'} value={draft} placeholder={saved ? rt.settings.credentialPreview(credId) : (placeholder || 'sk-…')} onInput={e => { setDraft(e.target.value); setShow(false) }} />
         {draft ? <button className="icon-btn small" onClick={() => setShow(!show)} aria-label={show ? t('hideSecret') : t('showSecret')}><Icon name="lock" size={16} /></button> : null}
       </div>
       <div className="row gap">
@@ -57,8 +57,8 @@ function GatewaySection() {
   return (
     <Section title={t('gateway')}>
       <div className="help">{t('gatewayHelp')}</div>
-      <Field label={t('gatewayUrl')}><input className="input mono" placeholder="http://192.168.1.100:8787" value={url} onInput={e => setUrl(e.target.value)} /></Field>
-      <Field label={t('gatewayCode')}><input className="input mono" value={code} onInput={e => setCode(e.target.value)} placeholder="123456" /></Field>
+      <Field label={t('gatewayUrl')}><input className="input mono" {...RAW} type="url" placeholder="http://192.168.1.100:8787" value={url} onInput={e => setUrl(e.target.value)} /></Field>
+      <Field label={t('gatewayCode')}><input className="input mono" {...RAW} value={code} onInput={e => setCode(e.target.value)} placeholder="123456" /></Field>
       <Field label={t('gatewayRoute')}>
         <Select value={g.route} onChange={v => rt.settings.update({ gateway: { route: v } })} options={[{ value: 'auto', label: t('routeAuto') }, { value: 'https', label: t('routeOn') }, { value: 'off', label: t('routeOff') }]} />
       </Field>
@@ -122,7 +122,7 @@ function DeepseekCard() {
       {open ? (
         <div className="sub">
           <Field label={t('baseUrl')} hint={DEEPSEEK_BASE_URL}>
-            <input className="input mono" value={baseURL} onInput={e => setBaseURL(e.target.value)} onBlur={() => rt.settings.update({ models: { deepseek: { baseURL: baseURL.trim() || DEEPSEEK_BASE_URL } } })} />
+            <input className="input mono" {...RAW} type="url" value={baseURL} onInput={e => setBaseURL(e.target.value)} onBlur={() => rt.settings.update({ models: { deepseek: { baseURL: baseURL.trim() || DEEPSEEK_BASE_URL } } })} />
           </Field>
           <Field label={t('retryPolicy')}>
             <Select value={retry.mode} onChange={v => rt.settings.update({ models: { retry: { mode: v } } })} options={[{ value: 'default', label: t('retryDefault') }, { value: 'all', label: t('retryAll') }, { value: 'off', label: t('retryOff') }]} />
@@ -148,7 +148,7 @@ export function ModelListEditor({ models, onChange, deepseek }) {
       {models.map((m, i) => (
         <div key={i} className="model-item">
           <div className="row gap">
-            <input className="input mono flex1" value={m.id} placeholder={t('modelId')} onInput={e => update(i, { id: e.target.value.trim() })} />
+            <input className="input mono flex1" {...RAW} value={m.id} placeholder={t('modelId')} onInput={e => update(i, { id: e.target.value.trim() })} />
             <button className="icon-btn small" onClick={() => onChange(models.filter((_, j) => j !== i))}><Icon name="trash" size={16} /></button>
             {i > 0 ? <button className="icon-btn small" onClick={() => { const c = models.slice(); const x = c[i - 1]; c[i - 1] = c[i]; c[i] = x; onChange(c) }}><Icon name="chevronUp" size={16} /></button> : null}
           </div>
@@ -167,7 +167,7 @@ export function ModelListEditor({ models, onChange, deepseek }) {
               {m.reasoningEfforts ? Object.keys(m.reasoningEfforts).map(level => (
                 <div key={level} className="row gap">
                   <span className="flex1">{effortLabel(level)}</span>
-                  <input className="input mono flex1" value={m.reasoningEfforts[level]} placeholder={t('apiValue')} onInput={e => update(i, { reasoningEfforts: Object.assign({}, m.reasoningEfforts, { [level]: e.target.value }) })} />
+                  <input className="input mono flex1" {...RAW} value={m.reasoningEfforts[level]} placeholder={t('apiValue')} onInput={e => update(i, { reasoningEfforts: Object.assign({}, m.reasoningEfforts, { [level]: e.target.value }) })} />
                   {level !== 'off' ? <button className="icon-btn small" onClick={() => { const r = Object.assign({}, m.reasoningEfforts); delete r[level]; update(i, { reasoningEfforts: r }) }}><Icon name="close" size={14} /></button> : null}
                 </div>
               )) : null}
@@ -272,12 +272,12 @@ export function ProviderPage({ params }) {
   return (
     <Page title={existing ? form.name || form.id : t('addProvider')} actions={existing ? <button className="icon-btn" onClick={remove}><Icon name="trash" size={20} /></button> : null}>
       <div className="pad">
-        <Field label={t('providerId')} hint={existing ? '' : 'lowercase, permanent'}><input className="input mono" disabled={!!existing} value={form.id} onInput={e => set({ id: e.target.value.trim().toLowerCase() })} /></Field>
+        <Field label={t('providerId')} hint={existing ? '' : 'lowercase, permanent'}><input className="input mono" {...RAW} disabled={!!existing} value={form.id} onInput={e => set({ id: e.target.value.trim().toLowerCase() })} /></Field>
         <Field label={t('displayName')}><input className="input" value={form.name} onInput={e => set({ name: e.target.value })} /></Field>
-        <Field label={t('baseUrl')}><input className="input mono" value={form.baseURL} placeholder="https://gateway.example/v1" onInput={e => set({ baseURL: e.target.value })} /></Field>
+        <Field label={t('baseUrl')}><input className="input mono" {...RAW} type="url" value={form.baseURL} placeholder="https://gateway.example/v1" onInput={e => set({ baseURL: e.target.value })} /></Field>
         <Field label={t('protocol')}><Select value={form.protocol} onChange={v => set({ protocol: v })} options={PROTOCOLS.map(p => ({ value: p, label: p === 'openai-completions' ? 'OpenAI Chat Completions' : 'Anthropic Messages' }))} /></Field>
         <Field label={t('apiKey')} hint={existing && rt.settings.hasCredential(existing.id) ? t('savedKey') + ' · ' + rt.settings.credentialPreview(existing.id) : ''}>
-          <input className="input mono" type="password" value={key} onInput={e => setKey(e.target.value)} placeholder={existing && rt.settings.hasCredential(existing.id) ? rt.settings.credentialPreview(existing.id) : 'sk-…'} />
+          <input className="input mono" {...RAW} type="password" value={key} onInput={e => setKey(e.target.value)} placeholder={existing && rt.settings.hasCredential(existing.id) ? rt.settings.credentialPreview(existing.id) : 'sk-…'} />
         </Field>
         {form.protocol === 'openai-completions' ? (
           <div>
@@ -415,13 +415,13 @@ function ApiKeyDialog({ o }) {
       {needsGateway || gw ? (
         <div>
           <div className="help small">{t('gatewayHelp')}</div>
-          <Field label={t('gatewayUrl')}><input className="input mono" value={gw} placeholder="http://192.168.1.100:8787" onInput={e => setGw(e.target.value)} /></Field>
-          <Field label={t('gatewayCode')}><input className="input mono" value={code} onInput={e => setCode(e.target.value)} /></Field>
+          <Field label={t('gatewayUrl')}><input className="input mono" {...RAW} type="url" value={gw} placeholder="http://192.168.1.100:8787" onInput={e => setGw(e.target.value)} /></Field>
+          <Field label={t('gatewayCode')}><input className="input mono" {...RAW} value={code} onInput={e => setCode(e.target.value)} /></Field>
         </div>
       ) : null}
       <Field label={t('apiKey')} hint={rt.gateway() || gw ? t('leaveBlankGateway') : t('apiKeyHint')}>
         <div className="secret-row">
-          <input className="input mono" type={show ? 'text' : 'password'} value={key} placeholder={rt.settings.hasCredential('deepseek') ? rt.settings.credentialPreview('deepseek') : 'sk-…'} onInput={e => setKey(e.target.value)} />
+          <input className="input mono" {...RAW} type={show ? 'text' : 'password'} value={key} placeholder={rt.settings.hasCredential('deepseek') ? rt.settings.credentialPreview('deepseek') : 'sk-…'} onInput={e => setKey(e.target.value)} />
           <button className="icon-btn small" onClick={() => setShow(!show)}><Icon name="lock" size={16} /></button>
         </div>
       </Field>

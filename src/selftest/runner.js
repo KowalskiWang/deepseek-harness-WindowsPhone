@@ -14,6 +14,7 @@
 import { Emitter, shortId, errorMessage, sleep, clone, clip, utf8Encode, base64ToBytes, createAbort, isAbortError } from '../core/util.js'
 import { SessionStore, textOfBlocks } from '../core/session.js'
 import { SANDBOX_CASES, SANDBOX_TOOLS, checkSandboxCase } from './sandbox-cases.js'
+import { hasPending } from '../core/remote-dsh.js'
 import { navigate, back, current } from '../ui/store.js'
 
 export const REQUEST_PATH = '/app/selftest-request.json'
@@ -24,13 +25,13 @@ const VERSION = typeof __DSH_VERSION__ !== 'undefined' ? __DSH_VERSION__ : 'dev'
 
 /** Suites in run order. model: needs a usable model; report: needs the gateway (report URL). */
 export const SUITES = [
-  { id: 'env' }, { id: 'storage' }, { id: 'images' }, { id: 'sandbox' }, { id: 'network' },
+  { id: 'env' }, { id: 'phone' }, { id: 'storage' }, { id: 'images' }, { id: 'sandbox' }, { id: 'network' },
   { id: 'llm', model: true }, { id: 'agent', model: true }, { id: 'interaction', model: true },
   { id: 'web', model: true }, { id: 'subagent', model: true }, { id: 'workflow', model: true },
   { id: 'compaction', model: true }, { id: 'schedule', model: true }, { id: 'mcp', report: true, model: true },
-  { id: 'gateway', report: true, model: true }, { id: 'ui' },
+  { id: 'gateway', report: true, model: true }, { id: 'remote', report: true }, { id: 'ui' },
 ]
-export const OFFLINE_SUITES = ['env', 'storage', 'images', 'sandbox', 'ui']
+export const OFFLINE_SUITES = ['env', 'phone', 'storage', 'images', 'sandbox', 'ui']
 
 let active = null
 /** The run in progress or the last one, so the page can come back to it. */
@@ -223,6 +224,10 @@ export class SelfTest extends Emitter {
     const snapshot = clone(rt.settings.get())
     const hadKey = rt.settings.getCredential('deepseek')
     const wanted = this.opts.suites && this.opts.suites.length ? this.opts.suites : SUITES.map(s => s.id)
+    // the whole run keeps the app alive and the screen on, even between agent work
+    const p = rt.platform
+    if (p.keepRunning) p.keepRunning(true, 'selftest')
+    if (p.keepScreenOn) p.keepScreenOn(true)
     try {
       this.env = envInfo(rt)
       this.send('start', { env: this.env, suites: wanted })
@@ -240,6 +245,8 @@ export class SelfTest extends Emitter {
     } finally {
       this.suite = 'selftest'
       try { await this.cleanup(snapshot, hadKey) } catch (e) { this.record('selftest', 'cleanup', 'fail', 0, errText(e)) }
+      if (p.keepRunning) p.keepRunning(false, 'selftest')
+      if (p.keepScreenOn) p.keepScreenOn(false)
       this.state = 'done'
       this.finishedAt = Date.now()
       this.current = null
@@ -416,6 +423,39 @@ export class SelfTest extends Emitter {
     })
   }
 
+  /** Native phone hooks (APPX only): status bar, tile and badge, vibration, background, keyboard. */
+  async suite_phone() {
+    const p = this.rt.platform
+    if (p.kind !== 'winrt') { this.record('phone', '(suite)', 'skip', 0, 'needs the installed app (APPX)'); return }
+    await this.check('status bar progress', async () => {
+      assert(p.busy && p.busy('DSH self-test…'), 'StatusBar progress indicator unavailable')
+      await sleep(1200)
+      p.busy(null)
+      return 'shown, then hidden'
+    })
+    await this.check('Start tile and badge', () => {
+      assert(p.tile && p.tile('DSH self-test', 'Tile update check'), 'tile update failed')
+      assert(p.badge && p.badge(2), 'badge update failed')
+      p.badge(0)
+      p.tile(null)
+      return 'updated, then cleared'
+    })
+    await this.check('vibration', () => {
+      assert(p.vibrate && p.vibrate(30), 'no vibration device')
+      return '30 ms'
+    })
+    await this.check('background execution', async () => {
+      if (!p.keepRunning) return { skip: 'not available' }
+      const granted = await p.keepRunning(true, 'selftest-check')
+      await p.keepRunning(false, 'selftest-check')
+      return { granted, screenOn: !!(p.keepScreenOn && p.keepScreenOn(true)) }
+    })
+    await this.check('keyboard (InputPane)', () => {
+      const pane = Windows.UI.ViewManagement.InputPane.getForCurrentView()
+      return { available: !!pane, keyboardOpen: !!(pane.occludedRect && pane.occludedRect.height) }
+    })
+  }
+
   async suite_storage() {
     const vfs = this.rt.vfs
     const base = '/tmp/dsh-selftest-' + this.id
@@ -583,18 +623,33 @@ export class SelfTest extends Emitter {
     }, 30000)
     await this.check('streaming reply', async () => {
       const route = rt.llm.resolve({ provider: 'deepseek', model, effort: 'off' })
-      const token = 'PONG-' + shortId(4).toUpperCase()
-      let deltas = 0
-      let ttft = 0
-      const t0 = Date.now()
-      const r = await rt.llm.stream(route, {
-        messages: [sys, user('Reply with exactly: ' + token)], tools: [], maxTokens: 200, effort: 'off',
-        onEvent: (e) => { if (e.kind === 'delta') { deltas++; if (!ttft) ttft = Date.now() - t0 } },
-      })
-      const text = textOf(r.content)
-      assert(text.indexOf(token) >= 0, 'reply: ' + clip(text, 200))
-      return { ttftMs: ttft, totalMs: Date.now() - t0, deltas, usage: r.usage }
-    }, 90000)
+      const attempt = async () => {
+        const token = 'PONG-' + shortId(4).toUpperCase()
+        let deltas = 0
+        let streamed = ''
+        let ttft = 0
+        const t0 = Date.now()
+        const r = await rt.llm.stream(route, {
+          messages: [sys, user('Reply with exactly: ' + token)], tools: [], maxTokens: 200, effort: 'off',
+          onEvent: (e) => { if (e.kind === 'delta') { deltas++; streamed += e.text || ''; if (!ttft) ttft = Date.now() - t0 } },
+        })
+        const text = textOf(r.content)
+        const out = (r.usage && r.usage.output) || 0
+        return { ok: text.indexOf(token) >= 0, text, streamed, out, deltas, ttft, ms: Date.now() - t0, usage: r.usage }
+      }
+      let a = await attempt()
+      let note
+      if (!a.ok) {
+        // The text must be what the model produced: about 4 characters per output token at
+        // most, and the deltas must add up to it. Anything else means the stream was mangled.
+        assert(a.streamed === a.text, 'streamed deltas differ from the final text (' + a.streamed.length + ' vs ' + a.text.length + ' chars)')
+        assert(!a.out || a.text.length <= a.out * 8 + 16, a.text.length + ' chars for ' + a.out + ' output tokens: ' + clip(a.text, 200))
+        note = 'first reply did not follow the instruction (' + a.out + ' tokens): ' + clip(a.text.replace(/\s+/g, ' '), 120)
+        a = await attempt()
+        assert(a.ok, 'twice off: ' + clip(a.text, 200))
+      }
+      return { ttftMs: a.ttft, totalMs: a.ms, deltas: a.deltas, usage: a.usage, note }
+    }, 120000)
     await this.check('thinking (effort high)', async () => {
       const route = rt.llm.resolve({ provider: 'deepseek', model, effort: 'high' })
       const t0 = Date.now()
@@ -864,6 +919,87 @@ export class SelfTest extends Emitter {
     } finally {
       rt.settings.set('gateway', saved)
       await rt.probeGateway().catch(() => {})
+    }
+  }
+
+  /** Desktop dsh behind the gateway (--dsh): a session that runs on the computer. */
+  async suite_remote() {
+    const rt = this.rt
+    const saved = clone(rt.settings.get().gateway)
+    rt.settings.update({ gateway: { url: this.report, code: this.opts.gatewayCode || saved.code } })
+    const remote = rt.remote
+    let info = null
+    let s = null
+    const until = (pred, ms) => new Promise((resolve, reject) => {
+      const t0 = Date.now()
+      const tick = () => {
+        if (hasPending(s)) {
+          const it = s.items.filter(i => i.kind === 'permission' && !i.decided)[0]
+          const allow = it && (it.options || []).filter(o => /^allow_once/.test(o.kind))[0]
+          if (it && allow) remote.answer(s.id, it.requestId, allow.optionId).catch(() => {})
+        }
+        if (pred()) { resolve(); return }
+        if (Date.now() - t0 > ms) { reject(new Error('no result within ' + Math.round(ms / 1000) + ' s')); return }
+        setTimeout(tick, 300)
+      }
+      tick()
+    })
+    try {
+      await this.check('bridge reachable', async () => {
+        try { info = await remote.refreshInfo() } catch (e) {
+          if (e.code === 'DSH_UNAVAILABLE') return { skip: 'the gateway was started without --dsh' }
+          throw e
+        }
+        return { roots: info.roots, running: info.running }
+      }, 20000)
+      if (!info) return
+      const mock = () => remote.info && remote.info.agent && remote.info.agent.agentInfo && remote.info.agent.agentInfo.name === 'acp-mock'
+      await this.check('new session on the computer', async () => {
+        const ls = await remote.ls(info.roots[0])
+        s = await remote.newSession(ls.path)
+        assert(s && s.id, 'no session id')
+        return { cwd: s.cwd, agent: remote.info.agent && remote.info.agent.agentInfo, model: s.config && s.config.filter(c => c.id === 'model').map(c => c.currentValue)[0] }
+      }, 240000)
+      if (!s) return
+      await this.check('prompt and reply', async () => {
+        const token = 'REMOTE-' + shortId(4).toUpperCase()
+        await remote.prompt(s.id, 'Reply with exactly: ' + token + '. Do not use any tools.')
+        await until(() => !s.running, 180000)
+        const end = s.items[s.items.length - 1]
+        assert(end.kind === 'end' && !end.error, 'turn ended with ' + JSON.stringify(end))
+        const reply = s.items.filter(i => i.kind === 'message').map(i => i.text).join('\n')
+        if (!mock()) assert(reply.indexOf(token) >= 0, 'reply: ' + clip(reply, 200))
+        return { stopReason: end.stopReason, reply: clip(reply, 120) }
+      }, 200000)
+      await this.check('run a command on the computer', async () => {
+        const from = s.items.length
+        await remote.prompt(s.id, 'Use your shell tool to run `echo dsh-mobile-$((6*7))` and tell me what it printed.')
+        await until(() => !s.running, 240000)
+        const items = s.items.slice(from)
+        const tools = items.filter(i => i.kind === 'tool')
+        assert(tools.length, 'no tool ran: ' + JSON.stringify(items.map(i => i.kind)))
+        assert(tools.some(t => t.status === 'completed'), 'tools: ' + JSON.stringify(tools.map(t => t.title + ' ' + t.status)))
+        if (!mock()) assert(/dsh-mobile-42/.test(items.map(i => (i.output || '') + (i.text || '')).join('\n')), 'output not seen')
+        return { tools: tools.map(t => t.title + ' ' + t.status), approvals: items.filter(i => i.kind === 'permission').length }
+      }, 260000)
+      // Opt-in (request field remoteApprovalPath: a file outside dsh's sandbox on the
+      // computer): a write there needs approval, answered from the phone; the file is removed again.
+      if (this.opts.remoteApprovalPath && !mock()) {
+        await this.check('approve a command from the phone', async () => {
+          const from = s.items.length
+          const p = this.opts.remoteApprovalPath
+          await remote.prompt(s.id, 'Use your shell tool to run exactly: echo approved > \'' + p + '\' — if the sandbox blocks it, request the wider permission and retry once. Then delete that file the same way, and reply "done".')
+          await until(() => !s.running, 300000)
+          const items = s.items.slice(from)
+          const perms = items.filter(i => i.kind === 'permission')
+          assert(perms.length, 'no permission was requested: ' + JSON.stringify(items.filter(i => i.kind === 'tool').map(t => t.title + ' ' + t.status)))
+          assert(perms.every(i => i.decided && /allow/.test(i.decided)), 'not all approved: ' + JSON.stringify(perms.map(i => i.decided)))
+          return { approvals: perms.length, tools: items.filter(i => i.kind === 'tool').map(t => t.title + ' ' + t.status) }
+        }, 330000)
+      }
+    } finally {
+      if (s) await remote.remove(s.id).catch(() => {})
+      rt.settings.set('gateway', saved)
     }
   }
 

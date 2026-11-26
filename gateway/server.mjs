@@ -11,11 +11,15 @@
 //   • serves the signed APPX + certificate under /download/
 //   • with --selftest: collects on-device self-test reports (POST /gateway/selftest
 //     → dist/selftest/<id>.json) and serves a tiny MCP test server (/gateway/mcp-test)
+//   • with --dsh: runs the desktop DeepSeek Harness (`dsh --profile acp`) and lets
+//     the phone drive it (/gateway/dsh/…, see dsh-bridge.mjs): an agent that works
+//     on this computer, with approvals answered on the phone
 //
 // Usage:
 //   node gateway/server.mjs [--port 8787] [--key-file ../api.txt] [--code 123456]
 //                           [--proxy http://127.0.0.1:1082] [--host 0.0.0.0]
 //                           [--selftest [dir]]
+//                           [--dsh <dsh or node> [--dsh-arg <bin.js>]… [--dsh-root <dir>]… [--dsh-home <dir>]]
 // No dependencies; Node 18+.
 import http from 'node:http'
 import https from 'node:https'
@@ -27,6 +31,7 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { createDshBridge } from './dsh-bridge.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(here, '..')
@@ -39,6 +44,11 @@ function arg(name, def) {
   const v = process.argv[i + 1]
   return v && !v.startsWith('--') ? v : true
 }
+function argAll(name) {
+  const out = []
+  for (let i = 0; i < process.argv.length - 1; i++) if (process.argv[i] === '--' + name) out.push(process.argv[i + 1])
+  return out
+}
 const PORT = parseInt(arg('port', process.env.DSH_GATEWAY_PORT || '8787'), 10)
 const HOST = arg('host', '0.0.0.0')
 const KEY_FILE = arg('key-file', process.env.DSH_GATEWAY_KEY_FILE || '')
@@ -46,6 +56,7 @@ const PROXY = arg('proxy', process.env.DSH_GATEWAY_PROXY || '')
 const STATIC_DIR = path.resolve(arg('static', path.join(root, 'dist/web')))
 const DOWNLOAD_DIR = path.resolve(arg('downloads', path.join(root, 'dist/package')))
 const DEEPSEEK_HOST = 'api.deepseek.com'
+const DSH = arg('dsh', '')
 const SELFTEST = arg('selftest', '')
 const SELFTEST_DIR = SELFTEST ? path.resolve(SELFTEST === true ? path.join(root, 'dist/selftest') : SELFTEST) : ''
 
@@ -60,6 +71,18 @@ if (CODE === true) CODE = ''
 if (apiKey && !CODE) CODE = String(crypto.randomInt(100000, 1000000))
 
 const mask = s => (s && s.length > 12 ? s.slice(0, 5) + '…' + s.slice(-4) : '***')
+
+// Desktop dsh, driven from the phone (needs the access code like key injection).
+let dsh = null
+if (DSH) {
+  if (!CODE) { console.error('--dsh lets the phone run an agent on this computer: set an access code with --code (or use --key-file)'); process.exit(1) }
+  const env = {}
+  if (apiKey) env.DEEPSEEK_API_KEY = apiKey
+  const home = arg('dsh-home', '')
+  if (home && home !== true) env.DSH_HOME = path.resolve(home)
+  const roots = argAll('dsh-root')
+  dsh = createDshBridge({ exe: DSH === true ? 'dsh' : DSH, args: argAll('dsh-arg'), env, roots: roots.length ? roots : [os.homedir()], version: VERSION })
+}
 
 // ---------------------------------------------------------------- SSRF guard
 function privateAddress(ip) {
@@ -141,10 +164,35 @@ function readBody(req, limit = 64 * 1024 * 1024) {
   })
 }
 
+// Wrong access codes: 10 within a minute block that address for 10 minutes, so
+// a 6-digit code cannot be guessed by brute force.
+const codeFailures = new Map() // ip → {n, first, blockedUntil}
+function codeBlocked(req) {
+  const f = codeFailures.get(req.socket.remoteAddress || '')
+  return !!(f && f.blockedUntil > Date.now())
+}
 function codeOk(req) {
   if (!CODE) return true
-  const given = req.headers['x-dsh-gateway-code'] || ''
-  return given.length === CODE.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(CODE))
+  if (codeBlocked(req)) return false
+  const given = Buffer.from(String(req.headers['x-dsh-gateway-code'] || ''))
+  const want = Buffer.from(CODE)
+  const ok = given.length === want.length && crypto.timingSafeEqual(given, want)
+  if (!ok && given.length) {
+    const ip = req.socket.remoteAddress || ''
+    const now = Date.now()
+    const prev = codeFailures.get(ip)
+    const f = prev && now - prev.first < 60000 ? prev : { n: 0, first: now, blockedUntil: 0 }
+    f.n++
+    if (f.n >= 10 && !f.blockedUntil) { f.blockedUntil = now + 10 * 60000; console.log(`blocked ${ip} for 10 minutes after ${f.n} wrong access codes`) }
+    codeFailures.set(ip, f)
+  }
+  return ok
+}
+/** Answer a request whose access code was wrong (or whose address is blocked). */
+function denyCode(req, res) {
+  return codeBlocked(req)
+    ? send(res, 429, { error: 'too many wrong access codes; try again later', code: 'GATEWAY_BLOCKED' })
+    : send(res, 401, { error: 'gateway access code required', code: 'GATEWAY_CODE' })
 }
 
 // ---------------------------------------------------------------- relay
@@ -153,7 +201,7 @@ async function relay(req, res, encodedOrigin, rest) {
   try { origin = new URL(b64urlDecode(encodedOrigin)) } catch (e) { return send(res, 400, { error: 'bad origin' }) }
   if (origin.protocol !== 'https:' || origin.pathname !== '/' && origin.pathname !== '') return send(res, 400, { error: 'only https origins are relayed' })
   if (/^(localhost|.*\.local|.*\.localhost)$/i.test(origin.hostname) || (net.isIP(origin.hostname) && privateAddress(origin.hostname))) return send(res, 403, { error: 'private destinations are not relayed' })
-  if (!codeOk(req)) return send(res, 401, { error: 'gateway access code required', code: 'GATEWAY_CODE' })
+  if (!codeOk(req)) return denyCode(req, res)
 
   const headers = {}
   for (const [k, v] of Object.entries(req.headers)) {
@@ -230,7 +278,7 @@ async function selftestReport(req, res) {
 const selftestRequests = new Map()
 
 async function selftestRequestPut(req, res) {
-  if (!codeOk(req)) return send(res, 401, { error: 'gateway access code required', code: 'GATEWAY_CODE' })
+  if (!codeOk(req)) return denyCode(req, res)
   const body = await readBody(req, 64 * 1024)
   let r
   try { r = JSON.parse(body.toString('utf8')) } catch (e) { return send(res, 400, { error: 'bad json' }) }
@@ -246,6 +294,26 @@ function selftestRequestGet(req, res, id) {
   if (!e || Date.now() - e.at > 15 * 60 * 1000) return send(res, 404, { error: 'no such self-test request' })
   console.log(`SELFTEST ${id} request fetched by ${req.socket.remoteAddress}`)
   return send(res, 200, e.request)
+}
+
+async function dshRoute(req, res, sub) {
+  if (!codeOk(req)) return denyCode(req, res)
+  const q = new URL(req.url, 'http://x').searchParams
+  const body = async () => { try { return JSON.parse((await readBody(req, 8 * 1024 * 1024)).toString('utf8') || '{}') } catch (e) { return null } }
+  try {
+    if (sub === 'info' && req.method === 'GET') return send(res, 200, await dsh.info())
+    if (sub === 'ls' && req.method === 'GET') return send(res, 200, await dsh.ls(q.get('path') || ''))
+    if (sub === 'events' && req.method === 'GET') return send(res, 200, await dsh.events(parseInt(q.get('after') || '0', 10) || 0, Math.min(30000, parseInt(q.get('wait') || '25000', 10) || 0)))
+    if (req.method !== 'POST') return send(res, 405, { error: 'method not allowed' })
+    const b = await body()
+    if (!b) return send(res, 400, { error: 'bad json' })
+    if (sub === 'call') return send(res, 200, await dsh.call(b.method, b.params || {}, { async: !!b.async }))
+    if (sub === 'notify') return send(res, 200, await dsh.notify(b.method, b.params || {}))
+    if (sub === 'respond') return send(res, 200, await dsh.respond(b.id, b.result))
+    return send(res, 404, { error: 'not found' })
+  } catch (e) {
+    return send(res, e.status || 502, { error: e.message, rpc: e.rpc })
+  }
 }
 
 const MCP_TOOLS = [
@@ -321,7 +389,8 @@ const server = http.createServer(async (req, res) => {
     if (urlPath === '/gateway/info') {
       cors(res)
       status = 200
-      return send(res, 200, { name: 'dsh-gateway', version: VERSION, injectsKey: !!apiKey && codeOk(req), codeRequired: !!CODE, codeAccepted: codeOk(req), upstream: 'https://' + DEEPSEEK_HOST })
+      const accepted = codeOk(req)
+      return send(res, 200, { name: 'dsh-gateway', version: VERSION, injectsKey: !!apiKey && accepted, codeRequired: !!CODE, codeAccepted: accepted, upstream: 'https://' + DEEPSEEK_HOST })
     }
     if (urlPath === '/gateway/client-log' && req.method === 'POST') {
       // Error reports from DSH Mobile clients, printed so device problems show up here.
@@ -336,6 +405,8 @@ const server = http.createServer(async (req, res) => {
       res.end()
       return
     }
+    const dm = /^\/gateway\/dsh\/([a-z]+)(\?.*)?$/.exec(urlPath)
+    if (dsh && dm) { cors(res); status = 200; return await dshRoute(req, res, dm[1]) }
     if (SELFTEST_DIR && urlPath === '/gateway/selftest' && req.method === 'POST') { cors(res); status = 204; return await selftestReport(req, res) }
     if (SELFTEST_DIR && urlPath === '/gateway/mcp-test' && req.method === 'POST') { cors(res); status = 200; return await mcpTest(req, res) }
     if (SELFTEST_DIR && urlPath === '/gateway/selftest-request' && req.method === 'POST') { status = 200; return await selftestRequestPut(req, res) }
@@ -361,7 +432,7 @@ const server = http.createServer(async (req, res) => {
     else res.destroy()
   } finally {
     const shown = urlPath.replace(/^\/x\/([A-Za-z0-9_-]+)/, (all, o) => { try { return '/x/' + b64urlDecode(o) } catch (e) { return all } })
-    if (!/^\/(css|js|img)\//.test(urlPath) && urlPath !== '/gateway/selftest') console.log(`${new Date().toISOString().slice(11, 19)} ${req.socket.remoteAddress} ${req.method} ${shown.slice(0, 120)} → ${status || res.statusCode} ${Date.now() - t0}ms`)
+    if (!/^\/(css|js|img)\//.test(urlPath) && urlPath !== '/gateway/selftest' && !urlPath.startsWith('/gateway/dsh/events')) console.log(`${new Date().toISOString().slice(11, 19)} ${req.socket.remoteAddress} ${req.method} ${shown.slice(0, 120)} → ${status || res.statusCode} ${Date.now() - t0}ms`)
   }
 })
 
@@ -374,5 +445,6 @@ server.listen(PORT, HOST, () => {
   console.log('  API key    :', apiKey ? `injected from ${KEY_FILE} (${mask(apiKey)})` : 'not injected (the app sends its own key)')
   console.log('  access code:', CODE || '(none)')
   if (PROXY) console.log('  upstream via proxy', PROXY)
+  if (dsh) console.log('  desktop dsh: ' + (DSH === true ? 'dsh' : DSH) + ' ' + argAll('dsh-arg').join(' ') + ' --profile acp (started on first use)')
   if (SELFTEST_DIR) console.log('  self-test  : reports → ' + SELFTEST_DIR + ', MCP test server at /gateway/mcp-test')
 })

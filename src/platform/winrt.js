@@ -93,8 +93,17 @@ export class StorageBackend {
     const S = Windows.Storage
     const { dir, name } = splitRel(rel)
     const parent = await this._folder(dir, true)
-    const file = await wrap(parent.createFileAsync(name, S.CreationCollisionOption.replaceExisting))
-    await wrap(S.FileIO.writeBytesAsync(file, bytes))
+    // Write a temporary file and rename it over the target: a save cut short by
+    // suspension leaves the previous file instead of an empty one.
+    const tmpName = '.' + name + '.' + Math.random().toString(36).slice(2, 8) + '.tmp'
+    const tmp = await wrap(parent.createFileAsync(tmpName, S.CreationCollisionOption.replaceExisting))
+    try {
+      await wrap(S.FileIO.writeBytesAsync(tmp, bytes))
+      await wrap(tmp.renameAsync(name, S.NameCollisionOption.replaceExisting))
+    } catch (e) {
+      try { await wrap(tmp.deleteAsync(S.StorageDeleteOption.permanentDelete)) } catch (e2) { /* already gone */ }
+      throw e
+    }
   }
 
   async appendText(rel, text) {
@@ -242,6 +251,17 @@ export async function createWinrtPlatform() {
   const images = createImageTools()
   const vault = () => new Windows.Security.Credentials.PasswordVault()
   const device = winrtDeviceInfo()
+  let extended = null
+  const keepReasons = {}
+  let displayRequest = null
+  let screenHeld = false
+  function vibrate(ms) {
+    try {
+      // the JavaScript projection takes TimeSpan as milliseconds
+      Windows.Phone.Devices.Notification.VibrationDevice.getDefault().vibrate(ms || 40)
+      return true
+    } catch (e) { return false }
+  }
 
   return {
     kind: 'winrt',
@@ -321,17 +341,121 @@ export async function createWinrtPlatform() {
       return null // not user-visible on WP8.1; caller falls back to the workspace copy
     },
     notify(kind, agent, data) {
-      if (!document.hidden && document.visibilityState !== 'hidden') return
+      const hidden = document.hidden || document.visibilityState === 'hidden'
+      if (!hidden) {
+        // in the foreground a waiting approval or question gets a short buzz
+        if (kind === 'needs-input') vibrate(70)
+        return
+      }
       try {
         const N = Windows.UI.Notifications
         const xml = N.ToastNotificationManager.getTemplateContent(N.ToastTemplateType.toastText02)
         const texts = xml.getElementsByTagName('text')
         const title = agent.meta.title || 'DSH'
-        const body = kind === 'needs-input' ? '等待你的操作' : kind === 'turn-failed' ? '本轮运行失败' : kind === 'schedule' ? '定时任务已开始' : '任务已完成'
+        const body = (data && data.text) || (kind === 'needs-input' ? '等待你的操作' : kind === 'turn-failed' ? '本轮运行失败' : kind === 'schedule' ? '定时任务已开始' : '任务已完成')
         texts[0].appendChild(xml.createTextNode(title))
         texts[1].appendChild(xml.createTextNode(body))
+        // tapping the toast opens this session (see onLaunch)
+        xml.getElementsByTagName('toast')[0].setAttribute('launch', JSON.stringify({ sessionId: agent.session.id }))
         N.ToastNotificationManager.createToastNotifier().show(new N.ToastNotification(xml))
       } catch (e) { /* toasts disabled */ }
+    },
+    /** Launch arguments (from a toast or a secondary tile), now and on later activations. */
+    onLaunch(fn) {
+      const A = Windows.ApplicationModel.Activation
+      Windows.UI.WebUI.WebUIApplication.addEventListener('activated', (args) => {
+        if (args.kind === A.ActivationKind.launch && args.arguments) fn(args.arguments)
+      })
+    },
+    /** Start-screen tile: the latest finished task, and a badge with what waits for the user. */
+    tile(title, text) {
+      try {
+        const N = Windows.UI.Notifications
+        if (title === null) { N.TileUpdateManager.createTileUpdaterForApplication().clear(); return true }
+        const T = N.TileTemplateType
+        const wide = N.TileUpdateManager.getTemplateContent(T.tileWide310x150Text09)
+        const square = N.TileUpdateManager.getTemplateContent(T.tileSquare150x150Text02)
+        for (const xml of [wide, square]) {
+          const texts = xml.getElementsByTagName('text')
+          texts[0].appendChild(xml.createTextNode(title))
+          texts[1].appendChild(xml.createTextNode(text))
+        }
+        const binding = wide.importNode(square.getElementsByTagName('binding')[0], true)
+        wide.getElementsByTagName('visual')[0].appendChild(binding)
+        N.TileUpdateManager.createTileUpdaterForApplication().update(new N.TileNotification(wide))
+        return true
+      } catch (e) { return false }
+    },
+    badge(count) {
+      try {
+        const N = Windows.UI.Notifications
+        const updater = N.BadgeUpdateManager.createBadgeUpdaterForApplication()
+        if (!count) { updater.clear(); return true }
+        const xml = N.BadgeUpdateManager.getTemplateContent(N.BadgeTemplateType.badgeNumber)
+        xml.getElementsByTagName('badge')[0].setAttribute('value', String(count))
+        updater.update(new N.BadgeNotification(xml))
+        return true
+      } catch (e) { return false }
+    },
+    /** Status-bar progress indicator (text, or null to hide): the phone's native "busy" signal. */
+    busy(text) {
+      try {
+        const pi = Windows.UI.ViewManagement.StatusBar.getForCurrentView().progressIndicator
+        if (text) {
+          pi.text = text
+          pi.progressValue = null
+          pi.showAsync()
+        } else pi.hideAsync()
+        return true
+      } catch (e) { return false }
+    },
+    vibrate,
+    /**
+     * Windows 10 Mobile: ask to keep running while work is in progress, so it can
+     * finish after the user switches apps. Held per reason ('tasks', 'selftest', …)
+     * and released when no reason is left. Resolves to whether it is granted.
+     */
+    keepRunning(on, reason) {
+      const key = reason || 'tasks'
+      if (on) keepReasons[key] = true
+      else delete keepReasons[key]
+      try {
+        const EE = Windows.ApplicationModel.ExtendedExecution
+        if (!EE || !EE.ExtendedExecutionSession) return Promise.resolve(false)
+        if (!Object.keys(keepReasons).length) {
+          if (extended) { try { extended.close() } catch (e) { /* closed */ } extended = null }
+          return Promise.resolve(false)
+        }
+        if (extended) return Promise.resolve(true)
+        const s = new EE.ExtendedExecutionSession()
+        s.reason = EE.ExtendedExecutionReason.unspecified
+        s.description = 'DSH agent task'
+        s.addEventListener('revoked', () => { if (extended === s) extended = null })
+        extended = s
+        return wrap(s.requestExtensionAsync()).then((r) => {
+          if (r === EE.ExtendedExecutionResult.allowed) return true
+          if (extended === s) extended = null
+          try { s.close() } catch (e) { /* closed */ }
+          return false
+        }, () => { if (extended === s) extended = null; return false })
+      } catch (e) { return Promise.resolve(false) }
+    },
+    /** Keep the screen from turning off (DisplayRequest), e.g. during a self-test. */
+    keepScreenOn(on) {
+      try {
+        if (!displayRequest) displayRequest = new Windows.System.Display.DisplayRequest()
+        if (on && !screenHeld) { displayRequest.requestActive(); screenHeld = true }
+        else if (!on && screenHeld) { displayRequest.requestRelease(); screenHeld = false }
+        return true
+      } catch (e) { return false }
+    },
+    /** The on-screen keyboard: fn(height in CSS px, 0 when hidden). The app resizes itself. */
+    onKeyboard(fn) {
+      try {
+        const pane = Windows.UI.ViewManagement.InputPane.getForCurrentView()
+        pane.addEventListener('showing', (e) => { e.ensuredFocusedElementInView = true; fn(e.occludedRect.height) })
+        pane.addEventListener('hiding', (e) => { e.ensuredFocusedElementInView = true; fn(0) })
+      } catch (e) { /* no input pane */ }
     },
     onBack(fn) {
       try {

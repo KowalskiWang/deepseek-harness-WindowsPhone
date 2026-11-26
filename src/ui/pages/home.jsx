@@ -196,6 +196,7 @@ export function HomePage() {
           { icon: 'settings', label: t('settings'), onClick: () => navigate('settings') },
         ]}
         menu={[
+          { label: t('desktopDsh'), onClick: () => navigate('remote') },
           { label: t('viewOptions'), onClick: () => dialog('viewOptions', {}) },
           { label: t('addWorkspace'), onClick: () => dialog('workspaces', {}) },
           { label: t('files'), onClick: () => { const ws = rt.workspaces.mostRecent(); if (ws) navigate('files', { root: ws.path, title: wsName(ws) }) } },

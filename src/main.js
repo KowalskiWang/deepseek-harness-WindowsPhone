@@ -5,6 +5,7 @@ import { h, render } from 'preact'
 import { Runtime } from './core/runtime.js'
 import { ui, back, toast, navigate } from './ui/store.js'
 import { readSelfTestRequest, startSelfTest } from './selftest/runner.js'
+import { installPhoneIntegration, launchTarget } from './ui/phone.js'
 import { App, applyTheme, onboarding } from './ui/app.jsx'
 import { setLanguage } from './ui/i18n.js'
 
@@ -76,6 +77,25 @@ function fatal(e) {
   el.appendChild(btn)
 }
 
+// A launch from a toast carries arguments; the first activation can arrive
+// before the platform is up, so it is caught here and handled after boot.
+let earlyLaunch = null
+try {
+  if (isWinrt()) {
+    Windows.UI.WebUI.WebUIApplication.addEventListener('activated', function (e) {
+      if (!ui.rt && e.kind === Windows.ApplicationModel.Activation.ActivationKind.launch && e.arguments) earlyLaunch = e.arguments
+    })
+  }
+} catch (e) { /* not the app */ }
+
+function openLaunch(args) {
+  const to = ui.rt && launchTarget(ui.rt, args)
+  if (!to) return
+  const top = ui.stack[ui.stack.length - 1]
+  if (top.page === to.page && top.params.sessionId === to.params.sessionId) return
+  navigate(to.page, to.params)
+}
+
 window.onerror = function (msg, src, line, col, err) {
   report('error', err || (msg + ' @' + src + ':' + line + ':' + col))
   if (!ui.rt) fatal(err || msg + ' @' + src + ':' + line + ':' + col)
@@ -137,6 +157,16 @@ async function boot() {
   render(h(App, null), document.getElementById('app'))
   platform.onBack(() => back())
   platform.onSuspend(() => rt.flush())
+  // The on-screen keyboard: shrink the app so the composer sits above it.
+  if (platform.onKeyboard) {
+    platform.onKeyboard(function (h) {
+      const el = document.getElementById('app')
+      if (el) el.style.bottom = h ? h + 'px' : ''
+      ui.emit('keyboard', h)
+    })
+  }
+  installPhoneIntegration(rt, platform)
+  if (platform.onLaunch) platform.onLaunch(openLaunch)
   rt.on('settings', () => applyTheme())
   rt.llm.ensureListing().catch(() => {})
   // A self-test request (pushed over Device Portal, or ?selftest= on the web
@@ -149,6 +179,7 @@ async function boot() {
     navigate('selftest')
     startSelfTest(rt, selfTest).promise.then(() => onboarding().catch(e => report('onboarding', e)))
   } else setTimeout(() => onboarding().catch(e => report('onboarding', e)), 200)
+  if (earlyLaunch && !selfTest) openLaunch(earlyLaunch)
   stage = 'running'
   booted = true
   bootNote('running')

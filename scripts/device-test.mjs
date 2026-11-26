@@ -9,7 +9,7 @@
 //        [--report http://<this computer>:8787] [--gateway-code 123456] \
 //        [--suites all|offline|env,storage,…] [--key-file api.txt] [--no-keep-key] \
 //        [--model deepseek-flash] [--route off|https] [--timeout 2400] [--keep-data]
-//        [--deliver pull|file]
+//        [--deliver pull|file] [--remote-approval-path <file outside dsh's sandbox>]
 //
 // The phone needs Developer mode, Device discovery and Device Portal on (see
 // docs/INSTALL.md). Start the gateway with --selftest so it collects reports
@@ -44,6 +44,8 @@ const KEY_FILE = arg('key-file', '')
 const KEEP_KEY = process.argv.indexOf('--no-keep-key') < 0
 const KEEP_DATA = process.argv.indexOf('--keep-data') >= 0
 const GATEWAY_CODE = arg('gateway-code', '')
+// a file path outside dsh's sandbox on this computer: enables the remote approval check
+const REMOTE_APPROVAL_PATH = arg('remote-approval-path', '')
 // pull: the app fetches the request from the gateway (needed on Windows 10 Mobile,
 // where files Device Portal writes into the app folder are unreadable by the app);
 // file: the request is written into the app folder directly.
@@ -90,6 +92,7 @@ async function main() {
     suites: SUITES === 'all' ? null : SUITES === 'offline' ? OFFLINE : SUITES.split(','),
   }
   if (GATEWAY_CODE && GATEWAY_CODE !== true) request.gatewayCode = String(GATEWAY_CODE)
+  if (REMOTE_APPROVAL_PATH && REMOTE_APPROVAL_PATH !== true) request.remoteApprovalPath = path.resolve(REMOTE_APPROVAL_PATH)
   const key = KEY_FILE ? fs.readFileSync(path.resolve(KEY_FILE), 'utf8').replace(/\s+/g, '') : ''
   if (key && !wdp.secure) throw new Error('refusing to send key material over plain HTTP; Device Portal HTTPS was not reachable')
   await wdp.deleteFile(pkg, DATA_DIR, 'selftest-result.json')

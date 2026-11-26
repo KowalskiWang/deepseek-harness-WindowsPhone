@@ -338,3 +338,11 @@ input[type=range] { width: 100%; }
 .model-item .input { margin-bottom: 4px; }
 .model-item .toggle-row { padding-left: 0; padding-right: 0; }
 .logo { vertical-align: middle; }
+
+/* Metro feel: a slight press-in ("tilt") on tappable things, and pages that
+   slide in briefly when opened. Kept short so older phones stay smooth. */
+.list-item.tappable, .btn, .icon-btn, .chip, .sheet-item, .popup-item, .send-btn, .appbar-btn, .appbar-menu-item { transition: transform 0.09s ease-out; }
+.btn:active, .icon-btn:active, .chip:active, .send-btn:active, .appbar-btn:active { transform: scale(0.94); }
+.list-item.tappable:active, .sheet-item:active, .popup-item:active, .appbar-menu-item:active { transform: scale(0.985); }
+.page { animation: page-in 0.16s ease-out; }
+@keyframes page-in { from { opacity: 0.2; transform: translateY(14px); } to { opacity: 1; transform: none; } }

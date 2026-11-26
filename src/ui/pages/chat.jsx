@@ -56,6 +56,11 @@ export function ChatPage({ params }) {
     if (el && stick.current) el.scrollTop = el.scrollHeight
   })
 
+  // The keyboard shrinks the page: keep the latest message in view.
+  useEffect(() => ui.on('keyboard', () => {
+    setTimeout(() => { const el = scrollRef.current; if (el && stick.current) el.scrollTop = el.scrollHeight }, 60)
+  }), [])
+
   if (!agent) return <Page title="…"><div className="center pad"><Spinner size={24} /></div></Page>
 
   const meta = agent.meta

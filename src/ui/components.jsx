@@ -129,6 +129,12 @@ export function Select({ value, options, onChange, disabled }) {
   )
 }
 
+/**
+ * Attributes for technical text (URLs, keys, codes, identifiers): no
+ * auto-capitalisation, autocorrect or spell check from the phone keyboard.
+ */
+export const RAW = { autocomplete: 'off', autocapitalize: 'off', autocorrect: 'off', spellcheck: false }
+
 export function Button({ kind, onClick, children, disabled, small, icon }) {
   return (
     <button className={'btn ' + (kind ? 'btn-' + kind : '') + (small ? ' btn-small' : '')} disabled={disabled} onClick={onClick}>

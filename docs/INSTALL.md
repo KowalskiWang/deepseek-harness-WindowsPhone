@@ -10,6 +10,7 @@ DSH Mobile 有两种形态，代码完全相同：
 > **真机验证**
 > - 2026‑11‑22，Nokia Lumia 1020（`Nokia 909`，Windows Phone 8.1，IE Mobile 11）：局域网 Web 版已跑通，包括启动与首次引导、模型列表、流式对话、自动标题、文件写入/读取、`run_code`（Web Worker 沙箱）、联网搜索。
 > - 2026‑11‑26，Lumia 950（RM‑1104，Windows 10 Mobile 10.0.15254）：从 Mac 通过 Wi‑Fi 安装 APPX（见 3b），应用直连 api.deepseek.com，设备自检（见 3c）83 项全部通过。
+> - 2026‑11‑27，Lumia 950 + 电脑上的 dsh 0.2.2‑rc.5（见 3d）：从手机在电脑上新建会话、执行命令；dsh 越出沙箱的操作在手机上批准。完整设备自检 93 项全部通过。
 > - WP8.1 上的 APPX 尚未真机验证，因为它需要 Windows 电脑部署。
 
 > **为什么需要网关？** Windows Phone 8.1 的系统 TLS（Windows 8.1 schannel）不支持 `api.deepseek.com` 及大多数现代 HTTPS 站点要求的 ECDHE‑RSA‑AES‑GCM 加密套件（已实测：服务器只接受这类套件）。所以 WP8.1 上的应用通过同一 Wi‑Fi 下电脑运行的 DSH 网关转发 HTTPS 请求。Windows 10 Mobile 可以直连，网关可选。
@@ -37,6 +38,7 @@ DSH gateway 0.2.3
 - `--key-file api.txt`：网关从文件读取 DeepSeek API Key 并在转发到 api.deepseek.com 时注入，**密钥不会经过 Wi‑Fi 传给手机**。此时网关强制要求 6 位**访问码**（每次启动随机生成，可用 `--code 135790` 固定）。
 - 不带 `--key-file`：网关只做透明转发，手机端需在“设置 → 模型”里自己填 API Key（会以明文 HTTP 经过局域网，仅建议在可信网络使用）。
 - `--port 8787`、`--host 0.0.0.0`、`--proxy http://127.0.0.1:1082`（上游走 HTTP 代理）可选。
+- 同一台设备在一分钟内输错 10 次访问码，会被锁定 10 分钟，以防暴力猜码。
 - macOS 首次运行可能弹出“是否允许 node 接受传入连接”，请选择**允许**，否则手机连不上。
 - 网关只转发 `https://` 公网地址，拒绝内网/本机目标，并跟随重定向（手机无法自己跟随到现代 HTTPS 站点）。
 
@@ -118,6 +120,27 @@ node scripts/device-test.mjs --device 192.168.1.35 \
 - `--route off`（默认）：模型请求从手机直连 DeepSeek。网关转发单独作为一项检查。
 - 自检请求的送达方式：Windows 10 Mobile 上，设备门户写进应用文件夹的文件，应用自己读不了（上传后设备门户会报 “Update file access failed”）。所以默认（`--deliver pull`）只放一个“指针”文件名，应用再从网关取请求。API Key 在局域网上传输时用一次性密钥加密，这个一次性密钥只通过设备门户的 HTTPS 连接送到手机。
 - 结果保存在 `dist/selftest/<id>.json`，网关终端也会逐项打印。
+
+### 3d. 用手机操作电脑（电脑上的 dsh）
+
+DSH Mobile 可以把任务交给电脑上的 DeepSeek Harness（`dsh`）：dsh 在电脑上运行，能用终端、读写文件、操作浏览器，需要授权的操作会在手机上弹出确认卡片。手机和电脑之间用 dsh 的 ACP（Agent Client Protocol）通信，由网关转接。
+
+1. 电脑上安装 Node.js 24.9 以上和 dsh：
+   ```bash
+   npm install -g @deepseek-ai/dsh
+   ```
+2. 启动网关时加上 `--dsh`。它必须有访问码：用了 `--key-file` 会自动生成，也可以用 `--code` 指定。
+   ```bash
+   node gateway/server.mjs --key-file api.txt --dsh dsh --dsh-root ~/Projects
+   ```
+   - `--dsh-root`：手机上能选择的工作文件夹，可以写多次。默认是用户主目录。
+   - `--dsh-home`：dsh 的数据目录，默认是 `~/.dsh`。
+   - 没有全局安装 dsh 时，可以写成 `--dsh /path/to/node --dsh-arg /path/to/@deepseek-ai/dsh/lib/bin.js`。
+3. 手机上：首页 → 更多（…）→ **电脑上的 dsh** → 新建电脑会话 → 选择电脑上的文件夹 → 开始对话。
+   - 会话列表里还会列出电脑上 dsh 保存的其他会话，点开即可继续。
+   - 电脑上的任务完成或需要授权时，手机会收到通知。
+
+安全提示：开启 `--dsh` 后，任何知道访问码、并且在同一局域网的设备都能让 dsh 在这台电脑上工作。所以请只在可信网络中使用，用完关掉网关。dsh 自己的权限策略仍然生效：越过沙箱的操作都会在手机上请你确认。
 
 ## 4. 常见问题
 

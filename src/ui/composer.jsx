@@ -253,10 +253,17 @@ export function Composer({ agent, onOpenModel }) {
     if (menuState) setMenuState(null)
   }
 
+  // Chinese/Japanese input methods compose text in place: wait for the final
+  // characters before offering the / and @ menus.
+  const composing = useRef(false)
   const onInput = (e) => {
     const v = e.target.value
     setText(v)
-    updateMenus(v)
+    if (!composing.current) updateMenus(v)
+  }
+  const onCompositionEnd = (e) => {
+    composing.current = false
+    updateMenus(e.target.value)
   }
 
   const choose = (item) => {
@@ -301,6 +308,20 @@ export function Composer({ agent, onOpenModel }) {
   }
 
   const sendLong = useLongPress(() => { if (agent.running && text.trim()) doSend(settings.busySend === 'queue' ? 'steer' : 'queue') })
+  // Sending from the keyboard: keep the input focused so the keyboard stays up.
+  const hadFocus = useRef(false)
+  const sendPress = Object.assign({}, sendLong, {
+    onPointerDown: (e) => {
+      hadFocus.current = document.activeElement === ref.current
+      sendLong.onPointerDown(e)
+    },
+    onMouseDown: (e) => { if (document.activeElement === ref.current) e.preventDefault() },
+  })
+  const sendClick = () => {
+    if (sendLong.wasLongPress()) return
+    doSend()
+    if (hadFocus.current && ref.current) { try { ref.current.focus() } catch (e) { /* detached */ } }
+  }
 
   const onKeyDown = (e) => {
     if (menuState && menuState.items.length && (e.keyCode === 13 || e.keyCode === 9)) { e.preventDefault(); choose(menuState.items[0]); return }
@@ -341,6 +362,7 @@ export function Composer({ agent, onOpenModel }) {
       ) : null}
       <div className="composer">
         <textarea ref={ref} className="composer-input" rows={1} value={text} onInput={onInput} onKeyDown={onKeyDown}
+          onCompositionStart={() => { composing.current = true }} onCompositionEnd={onCompositionEnd}
           placeholder={planMode ? t('planPlaceholder') : t('composerPlaceholder')} />
         <div className="composer-bar">
           <button className="icon-btn" aria-label={t('addFilesOrCommands')} onClick={async () => {
@@ -363,7 +385,7 @@ export function Composer({ agent, onOpenModel }) {
           <span className="flex1" />
           {running && empty
             ? <button className="send-btn stop" onClick={() => agent.cancel('user')} aria-label={t('stop')}><Icon name="stop" size={18} /></button>
-            : <button className={'send-btn' + (empty ? ' disabled' : '')} {...sendLong} onClick={() => { if (!sendLong.wasLongPress()) doSend() }} aria-label={running ? t(settings.busySend) : t('send')}>
+            : <button className={'send-btn' + (empty ? ' disabled' : '')} {...sendPress} onClick={sendClick} aria-label={running ? t(settings.busySend) : t('send')}>
               <Icon name={running ? (settings.busySend === 'steer' ? 'bolt' : 'clock') : 'send'} size={18} />
             </button>}
         </div>
